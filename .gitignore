@@ -1,0 +1,36 @@
+# Ambientes Virtuais Python
+.venv/
+env/
+venv/
+ENV/
+
+# Python Cache & Bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Bancos de Dados Locais
+*.db
+*.sqlite
+*.sqlite3
+/Banco de dados/
+
+# Datasets e Imagens
+/data/
+/dataset/
+
+# Pesos do YOLO e Artefatos do Treinamento
+*.pt
+/models/*.pt
+/runs/
+
+# Binários do Go
+sync_daemon
+sync_daemon.exe
+sync_daemon_raspberry
+
+# Credenciais do Kaggle e Variáveis de Ambiente
+kaggle.json
+.env

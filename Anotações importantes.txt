@@ -1,0 +1,58 @@
+Duas mudanças importantes de entendimento, vou explicar antes do código:
+
+1. **Sensores direto no Raspberry** — ok, isso simplifica: sem ESP32 no meio, o Raspberry lê os sensores via GPIO/USB/serial diretamente. Não muda o schema do banco (já estava genérico o suficiente), só muda quem fala com o sensor.
+
+2. **Rodar em Windows e Raspberry** — aqui tem um detalhe técnico crítico que preciso te contar: o driver que você está usando, `mattn/go-sqlite3`, usa **CGO** (compila código C por baixo dos panos). Isso significa que pra compilar pro Windows você precisa de um compilador C do Windows instalado, e pra compilar pro Raspberry (ARM) você precisa de um cross-compiler C pra ARM. É bem dor de cabeça e trava muita gente na véspera da apresentação.
+
+**A solução**: trocar para `modernc.org/sqlite`, um driver SQLite **100% Go, sem CGO**. Com ele, `go build` funciona liso nas duas plataformas sem precisar instalar nenhum compilador C extra — só trocar duas variáveis de ambiente (`GOOS`/`GOARCH`).
+
+Também aproveitei pra corrigir 3 problemas que identifiquei antes:
+- A duplicação em caso de queda de rede (resolvido com `uuid_local` + `ON CONFLICT DO NOTHING`)
+- O sync agora cobre as **3 tabelas** (toras, indicadores, defeitos), não só uma
+- IP/senha do Postgres configuráveis por variável de ambiente, sem precisar recompilar no dia da apresentaçãoPronto. Agora vou te dar as instruções de build — isso é essencial pra evitar dor de cabeça no dia da apresentação.## Como configurar e compilar
+
+**1. Ajustar o `go.mod`** (troca de driver):
+
+```bash
+go mod init sync_daemon   # se ainda não tiver go.mod
+go get modernc.org/sqlite
+go get github.com/lib/pq
+```
+
+**2. Compilar pras duas plataformas** — e aqui está a mágica de não usar CGO:
+
+```bash
+# Para o Raspberry Pi (a maioria é ARM64 nos modelos 4/5; use arm/7 se for modelo antigo 32-bit)
+GOOS=linux GOARCH=arm64 go build -o sync_daemon_raspberry sync.go
+
+# Para Windows (as máquinas John Deere com Windows Embedded)
+GOOS=windows GOARCH=amd64 go build -o sync_daemon.exe sync.go
+```
+
+Nenhum dos dois comandos precisa de compilador C instalado — só o `go build` puro. É literalmente rodar o mesmo comando duas vezes trocando a variável de ambiente.
+
+**3. No dia da apresentação**, ajustar o IP sem recompilar:
+
+```bash
+# Windows (PowerShell)
+$env:PG_HOST="192.168.15.23"
+.\sync_daemon.exe
+
+# Raspberry Pi (Linux)
+PG_HOST=192.168.15.23 ./sync_daemon_raspberry
+```
+
+---
+
+## Um ponto de atenção importante
+
+A query de sincronização faz um `JOIN` com as tabelas `maquinas` e `talhoes` do PostgreSQL, buscando pelo `numero_serie` e `nome` respectivamente. Isso significa que **antes do primeiro sync**, vocês precisam ter pelo menos um registro em cada uma dessas tabelas — por exemplo:
+
+```sql
+INSERT INTO maquinas (modelo, numero_serie) VALUES ('Colhedora John Deere', 'RASPI-DEMO-01');
+INSERT INTO talhoes (nome, area_hectares, especie) VALUES ('Talhão Demo', 10.5, 'Eucalipto');
+```
+
+Caso contrário, o `LEFT JOIN` vai gerar `maquina_id` nulo na tora sincronizada (não trava o sync, mas fica sem rastreabilidade da máquina).
+
+Quer seguir agora pro script Python do Raspberry (que grava nessas 3 tabelas locais e lê os sensores diretamente, sem o ESP32)?
