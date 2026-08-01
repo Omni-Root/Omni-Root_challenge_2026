@@ -100,7 +100,7 @@ def rodar_simulacao(num_toras: int = 10):
     print("=" * 65)
 
     cfg = CONFIG
-    cfg.sqlite_path = "./stanford_local.db"
+    cfg.sqlite_path = "./omni_root_local.db"
 
     modelo = carregar_modelo()
     sensores = SensorSimulado()
@@ -196,7 +196,7 @@ def rodar_simulacao(num_toras: int = 10):
     print(f"✅ Aprovadas                : {resumo_estatistico['aprovado']} ({resumo_estatistico['aprovado']/num_toras:.1%})")
     print(f"⚠️  Quarentena (Revisão)     : {resumo_estatistico['quarentena']} ({resumo_estatistico['quarentena']/num_toras:.1%})")
     print(f"❌ Reprovadas                : {resumo_estatistico['reprovado']} ({resumo_estatistico['reprovado']/num_toras:.1%})")
-    print(f"💾 Registros armazenados em  : ./stanford_local.db")
+    print(f"💾 Registros armazenados em  : ./omni_root_local.db")
 
     # Testa exportação StanForD 2010
     print("\n📄 Gerando arquivo oficial StanForD 2010 (.hpr)...")

@@ -53,7 +53,7 @@ class Config:
     talhao_id: str = "Talhão Demo"
 
     # --- Banco local ---
-    sqlite_path: str = "./stanford_local.db"
+    sqlite_path: str = "./omni_root_local.db"
 
     # --- Modelo de IA ---
     modelo_ncnn_path: str = "./models/wood_ncnn_model"
@@ -421,7 +421,14 @@ def main():
     args = parser.parse_args()
 
     cfg = CONFIG
-    sensores = SensorSimulado() if args.simulado else SensorReal(cfg)
+    if args.simulado:
+        sensores = SensorSimulado()
+    else:
+        try:
+            sensores = SensorReal(cfg)
+        except (ImportError, ModuleNotFoundError):
+            print("ℹ️ Hardware Raspberry Pi (RPi.GPIO / spidev) não encontrado. Alternando automaticamente para sensores simulados.")
+            sensores = SensorSimulado()
 
     print("📦 Carregando modelo IA...")
     caminho_modelo = None
@@ -493,10 +500,17 @@ def main():
             densidade = calcular_densidade_estimada(forca_bruta)
             tortuosidade = calcular_tortuosidade(contorno_tora)
 
+            # Cálculo de volume útil (m³) e triagem por destino (Suzano/John Deere)
+            raio_m = (max(altura_cm * 0.25, 10.0) / 100.0) / 2.0
+            comprimento_m = max(altura_cm / 100.0, 2.5)
+            volume_bruto_m3 = float(np.pi * (raio_m ** 2) * comprimento_m)
+            volume_util_m3 = round(float(volume_bruto_m3 * confianca_saude), 3)
+
             indicadores = {
                 "densidade": {"valor": densidade, "unidade": "kg/m3", "metodo": "fusao_sensores"},
                 "altura": {"valor": altura_cm, "unidade": "cm", "metodo": "imagem_gsd_ultrassom"},
                 "tortuosidade": {"valor": tortuosidade, "unidade": "indice", "metodo": "opencv_contorno"},
+                "volume_util": {"valor": volume_util_m3, "unidade": "m3", "metodo": "geometria_saude_ia"},
                 "apodrecimento_pragas": {
                     "valor": round(confianca_saude * 100, 2),
                     "unidade": "%",

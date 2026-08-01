@@ -34,3 +34,5 @@ sync_daemon_raspberry
 # Credenciais do Kaggle e Variáveis de Ambiente
 kaggle.json
 .env
+
+dashboard/

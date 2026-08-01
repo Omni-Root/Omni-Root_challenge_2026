@@ -302,7 +302,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Exporta o SQLite local para arquivos .hpr (StanForD 2010-inspired)"
     )
-    parser.add_argument("--db", default="./stanford_local.db", help="Caminho do SQLite local")
+    parser.add_argument("--db", default="./omni_root_local.db", help="Caminho do SQLite local")
     parser.add_argument("--out", default="./export_stanford", help="Pasta de saída dos .hpr")
     parser.add_argument("--talhao", default=None, help="Exporta só este talhão (default: todos)")
     parser.add_argument(

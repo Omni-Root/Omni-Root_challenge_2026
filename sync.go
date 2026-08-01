@@ -38,7 +38,7 @@ type Config struct {
 
 func carregarConfig() Config {
 	return Config{
-		SqlitePath:   getEnv("SQLITE_PATH", filepath.Join(".", "stanford_local.db")),
+		SqlitePath:   getEnv("SQLITE_PATH", filepath.Join(".", "omni_root_local.db")),
 		PgHost:       getEnv("PG_HOST", "192.168.1.100"),
 		PgPort:       getEnv("PG_PORT", "5432"),
 		PgUser:       getEnv("PG_USER", "postgres"),
