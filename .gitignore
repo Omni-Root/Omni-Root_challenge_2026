@@ -15,7 +15,6 @@ __pycache__/
 *.db
 *.sqlite
 *.sqlite3
-/Banco de dados/
 
 # Datasets e Imagens
 /data/
@@ -34,5 +33,3 @@ sync_daemon_raspberry
 # Credenciais do Kaggle e Variáveis de Ambiente
 kaggle.json
 .env
-
-dashboard/
