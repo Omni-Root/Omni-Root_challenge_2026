@@ -6,20 +6,29 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
-	_ "github.com/lib/pq"          // driver PostgreSQL (puro Go, já não usa CGO)
-	_ "modernc.org/sqlite"          // driver SQLite 100% Go — SEM CGO
+	"github.com/joho/godotenv" // le o arquivo .env e injeta como variaveis de ambiente
+	_ "github.com/lib/pq"      // driver PostgreSQL (puro Go, já não usa CGO)
+	_ "modernc.org/sqlite"     // driver SQLite 100% Go — SEM CGO
 )
 
 // ============================================================
 // CONFIGURAÇÃO
 // ============================================================
-// Lida de variáveis de ambiente, com valores padrão. Isso permite
-// ajustar o IP/senha do Postgres no dia da apresentação SEM
-// recompilar o programa — só mudar o .env ou exportar a variável.
+// Lida do arquivo .env (se existir) e depois de variáveis de ambiente
+// do sistema — o que já estiver setado no sistema tem prioridade sobre
+// o .env, e o .env tem prioridade sobre os valores padrão abaixo.
+// Isso permite ajustar IP/senha do Postgres no dia da apresentação SEM
+// recompilar o programa — só editar o .env.
 //
-// Exemplo de uso na véspera da apresentação:
+// IMPORTANTE: o .env tem dado sensível (senha do banco) e NÃO deve ir
+// pro Git — já está no .gitignore. Quem clonar o repo deve copiar o
+// .env.example para .env e preencher os valores reais.
+//
+// Exemplo de uso na véspera da apresentação (sobrescreve o .env sem
+// editar o arquivo, se precisar trocar rápido num terminal):
 //   Windows (PowerShell):
 //     $env:PG_HOST="192.168.15.23"; .\sync_daemon.exe
 //   Raspberry Pi (Linux):
@@ -37,15 +46,19 @@ type Config struct {
 }
 
 func carregarConfig() Config {
-	return Config{
+	cfg := Config{
 		SqlitePath:   getEnv("SQLITE_PATH", filepath.Join(".", "omni_root_local.db")),
-		PgHost:       getEnv("PG_HOST", "192.168.1.100"),
+		PgHost:       getEnv("PG_HOST", "localhost"),
 		PgPort:       getEnv("PG_PORT", "5432"),
 		PgUser:       getEnv("PG_USER", "postgres"),
-		PgPassword:   getEnv("PG_PASSWORD", "suasenha"),
+		PgPassword:   getEnv("PG_PASSWORD", ""),
 		PgDBName:     getEnv("PG_DBNAME", "desafio_madeira"),
-		IntervaloSeg: 10,
+		IntervaloSeg: getEnvInt("SYNC_INTERVALO_SEG", 30),
 	}
+	if cfg.PgPassword == "" {
+		fmt.Println("⚠️  PG_PASSWORD não definido (.env ausente ou vazio) — tentando conectar sem senha.")
+	}
+	return cfg
 }
 
 func getEnv(chave, padrao string) string {
@@ -53,6 +66,19 @@ func getEnv(chave, padrao string) string {
 		return valor
 	}
 	return padrao
+}
+
+func getEnvInt(chave string, padrao int) int {
+	valorStr, existe := os.LookupEnv(chave)
+	if !existe || valorStr == "" {
+		return padrao
+	}
+	valor, err := strconv.Atoi(valorStr)
+	if err != nil {
+		fmt.Printf("⚠️  %s inválido (%q) — usando padrão de %d segundos.\n", chave, valorStr, padrao)
+		return padrao
+	}
+	return valor
 }
 
 func (c Config) pgDSN() string {
@@ -67,36 +93,43 @@ func (c Config) pgDSN() string {
 // ============================================================
 
 type Tora struct {
-	IDLocal              int
-	UUIDLocal            string
-	MaquinaID            string
-	TalhaoID             sql.NullString
-	LogID                string
-	DataInspecao         string
-	ConfiancaIA          float64
-	StatusClassificacao  string
-	HashSHA256           string
+	IDLocal             int
+	UUIDLocal           string
+	MaquinaID           string
+	TalhaoID            sql.NullString
+	LogID               string
+	DataInspecao        string
+	ConfiancaIA         float64
+	StatusClassificacao string
+	HashSHA256          string
 }
 
 type Indicador struct {
-	IDLocal        int
-	TipoIndicador  string
-	Valor          float64
-	Unidade        sql.NullString
-	MetodoMedicao  string
+	IDLocal       int
+	TipoIndicador string
+	Valor         float64
+	Unidade       sql.NullString
+	MetodoMedicao string
 }
 
 type Defeito struct {
-	IDLocal      int
-	TipoDefeito  string
-	PosX         float64
-	PosY         float64
-	Largura      float64
-	Altura       float64
-	Confianca    float64
+	IDLocal     int
+	TipoDefeito string
+	PosX        float64
+	PosY        float64
+	Largura     float64
+	Altura      float64
+	Confianca   float64
 }
 
 func main() {
+	// Carrega o .env pra dentro das variáveis de ambiente do processo.
+	// Se o arquivo não existir, não é erro fatal — só segue usando
+	// variáveis de ambiente do sistema e os valores padrão.
+	if err := godotenv.Load(); err != nil {
+		fmt.Println("ℹ️  Nenhum .env encontrado (ou erro ao ler) — usando variáveis de ambiente do sistema / padrões.")
+	}
+
 	cfg := carregarConfig()
 	fmt.Println("⚙️  Sincronizador Go iniciado! Rodando em background...")
 	fmt.Printf("📁 SQLite local : %s\n", cfg.SqlitePath)

@@ -63,7 +63,7 @@ CREATE TABLE indicadores_qualidade (
     id                SERIAL PRIMARY KEY,
     tora_id           INTEGER NOT NULL REFERENCES toras_inspecionadas(id) ON DELETE CASCADE,
     tipo_indicador    VARCHAR(30) NOT NULL
-                      CHECK (tipo_indicador IN ('densidade', 'altura', 'tortuosidade', 'apodrecimento_pragas')),
+                      CHECK (tipo_indicador IN ('densidade', 'altura', 'diametro', 'tortuosidade', 'volume_util', 'apodrecimento_pragas')),
     valor             NUMERIC(10,4) NOT NULL,
     unidade           VARCHAR(20),             -- ex: "kg/m3", "m", "indice", "%"
     metodo_medicao    VARCHAR(50) NOT NULL,    -- ex: "fusao_sensores", "imagem_4k_ultrassom", "opencv_contorno", "yolo"

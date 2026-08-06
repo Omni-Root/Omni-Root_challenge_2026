@@ -1,0 +1,12 @@
+# Dependências multiplataforma (Windows, Windows Embedded, Linux, macOS)
+ultralytics
+opencv-python-headless
+numpy
+
+# Só instalam/são necessárias rodando de verdade num Raspberry Pi com GPIO
+# físico. Em qualquer outro sistema (Windows, notebook, etc.) o "sys_platform
+# == linux" abaixo já impede o pip de tentar instalar (spidev nem compila
+# fora de Linux) — e o main.py já cai sozinho para sensores simulados
+# se elas não estiverem presentes.
+RPi.GPIO; sys_platform == "linux"
+spidev; sys_platform == "linux"

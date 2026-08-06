@@ -44,7 +44,7 @@ CREATE TABLE indicadores_qualidade_local (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     tora_id           INTEGER NOT NULL REFERENCES toras_local(id) ON DELETE CASCADE,
     tipo_indicador    TEXT NOT NULL
-                      CHECK (tipo_indicador IN ('densidade', 'altura', 'tortuosidade', 'apodrecimento_pragas')),
+                      CHECK (tipo_indicador IN ('densidade', 'altura', 'diametro', 'tortuosidade', 'volume_util', 'apodrecimento_pragas')),
     valor             REAL NOT NULL,
     unidade           TEXT,
     metodo_medicao    TEXT NOT NULL,

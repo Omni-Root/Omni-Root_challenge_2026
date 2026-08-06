@@ -34,6 +34,7 @@ from main import (
     calcular_densidade_estimada,
     calcular_dimensao_real_cm,
     calcular_tortuosidade,
+    calcular_volume_m3,
     classificar_qualidade,
     conectar_banco,
     extrair_contorno_tora,
@@ -144,19 +145,25 @@ def rodar_simulacao(num_toras: int = 10):
 
         contorno_tora = extrair_contorno_tora(frame)
         if contorno_tora is not None and len(contorno_tora) > 0:
-            _, _, _, h_box = cv2.boundingRect(contorno_tora)
+            _, _, w_box, h_box = cv2.boundingRect(contorno_tora)
+            largura_px = float(w_box)
             altura_px = float(h_box)
         else:
+            largura_px = float(frame.shape[1] * 0.2)
             altura_px = float(frame.shape[0] * 0.7)
 
         altura_cm = calcular_dimensao_real_cm(altura_px, distancia_cm, cfg)
+        diametro_cm = calcular_dimensao_real_cm(largura_px, distancia_cm, cfg)
         densidade = calcular_densidade_estimada(forca_bruta)
         tortuosidade = calcular_tortuosidade(contorno_tora)
+        volume_util_m3 = calcular_volume_m3(diametro_cm, altura_cm, confianca_saude)
 
         indicadores = {
             "densidade": {"valor": densidade, "unidade": "kg/m3", "metodo": "fusao_sensores"},
             "altura": {"valor": altura_cm, "unidade": "cm", "metodo": "imagem_gsd_ultrassom"},
+            "diametro": {"valor": diametro_cm, "unidade": "cm", "metodo": "imagem_gsd_ultrassom"},
             "tortuosidade": {"valor": tortuosidade, "unidade": "indice", "metodo": "opencv_contorno"},
+            "volume_util": {"valor": volume_util_m3, "unidade": "m3", "metodo": "geometria_medida"},
             "apodrecimento_pragas": {
                 "valor": round(confianca_saude * 100, 2),
                 "unidade": "%",
@@ -173,8 +180,10 @@ def rodar_simulacao(num_toras: int = 10):
             "status": status,
             "saude": confianca_saude,
             "altura": altura_cm,
+            "diametro": diametro_cm,
             "densidade": densidade,
             "tortuosidade": tortuosidade,
+            "volume": volume_util_m3,
             "defeitos": len(defeitos),
         })
 
@@ -182,8 +191,9 @@ def rodar_simulacao(num_toras: int = 10):
         print(
             f"Tora #{idx:02d} {emoji} [{uuid_gerado[:8]}] Status: {status:<10} | "
             f"Saúde IA: {confianca_saude:>6.1%} | Altura: {altura_cm:>5.1f}cm | "
+            f"Diâmetro: {diametro_cm:>5.1f}cm | "
             f"Densidade: {densidade:>5.1f}kg/m³ | Tortuosos.: {tortuosidade:>5.2f} | "
-            f"Defeitos: {len(defeitos)}"
+            f"Volume: {volume_util_m3:>5.3f}m³ | Defeitos: {len(defeitos)}"
         )
         time.sleep(0.1)
 
@@ -196,6 +206,8 @@ def rodar_simulacao(num_toras: int = 10):
     print(f"✅ Aprovadas                : {resumo_estatistico['aprovado']} ({resumo_estatistico['aprovado']/num_toras:.1%})")
     print(f"⚠️  Quarentena (Revisão)     : {resumo_estatistico['quarentena']} ({resumo_estatistico['quarentena']/num_toras:.1%})")
     print(f"❌ Reprovadas                : {resumo_estatistico['reprovado']} ({resumo_estatistico['reprovado']/num_toras:.1%})")
+    volume_total_m3 = sum(t["volume"] for t in historico_toras)
+    print(f"🪵 Volume útil total         : {volume_total_m3:.3f} m³")
     print(f"💾 Registros armazenados em  : ./omni_root_local.db")
 
     # Testa exportação StanForD 2010

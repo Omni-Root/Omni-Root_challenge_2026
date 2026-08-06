@@ -14,17 +14,22 @@ O que este script faz, em ordem:
      sync.go sincronizar com o PostgreSQL quando houver rede
 
 Modo de uso:
-  Produção no Raspberry:
+  Produção no Raspberry (com sensores/GPIO reais):
     python3 main.py
 
-  Teste no seu PC, sem hardware (webcam comum + sensores simulados):
-    python3 main.py --simulado
+  Em QUALQUER outro sistema (Windows, Windows Embedded, notebook, etc.):
+    Se RPi.GPIO/spidev não estiverem instalados (não vão estar fora de um
+    Raspberry), o script detecta sozinho e cai para sensores simulados —
+    não precisa passar nenhuma flag pra isso funcionar. Mas para garantir
+    que a janela com as bounding boxes apareça na demonstração, rode:
+    python3 main.py --simulado --gui
 
 Dependências (requirements.txt):
   ultralytics
   opencv-python-headless
-  RPi.GPIO      (só no Raspberry — em --simulado não é necessário)
-  spidev        (só no Raspberry — comunicação com o ADC MCP3008)
+  numpy
+  RPi.GPIO      (só instala/roda em Linux — em qualquer outro SO, ignorado)
+  spidev        (idem — comunicação com o ADC MCP3008, só no Raspberry)
 """
 
 import argparse
@@ -32,6 +37,7 @@ import hashlib
 import json
 import random
 import sqlite3
+import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -168,6 +174,33 @@ def calcular_dimensao_real_cm(tamanho_px: float, distancia_cm: float, cfg: Confi
         cfg.distancia_focal_mm * cfg.largura_imagem_px
     )
     return round(tamanho_px * gsd_cm_por_px, 2)
+
+
+def calcular_volume_m3(diametro_cm: float, comprimento_cm: float, confianca_saude: float) -> float:
+    """
+    Estima o volume da tora a partir de medidas REAIS (diâmetro e
+    comprimento, ambos vindos do bounding box do contorno + GSD) —
+    não mais de uma proporção arbitrária entre os dois.
+
+    Fórmula do cilindro (aproximação de Huber, sem afilamento):
+        volume_bruto = pi * raio^2 * comprimento
+
+    Para volume comercial mais preciso (considerando o afilamento
+    natural da tora), a indústria usa a fórmula de Smalian, que pede
+    o diâmetro nas DUAS pontas:
+        volume = (pi/8) * (diametro_fino^2 + diametro_grosso^2) * comprimento
+    Isso exigiria medir o diâmetro nas duas extremidades da tora (hoje
+    só medimos uma vez, no centro do frame) — fica como próximo passo
+    se quiserem refinar depois da apresentação.
+
+    volume_util desconta, de forma proporcional, o volume equivalente
+    à severidade dos defeitos detectados (confianca_saude = 1.0 = tora
+    limpa, sem desconto).
+    """
+    raio_m = (diametro_cm / 100.0) / 2.0
+    comprimento_m = comprimento_cm / 100.0
+    volume_bruto_m3 = float(np.pi * (raio_m ** 2) * comprimento_m)
+    return round(float(volume_bruto_m3 * confianca_saude), 3)
 
 
 def calcular_densidade_estimada(valor_forca_bruto: int) -> float:
@@ -445,7 +478,12 @@ def main():
     conexao = conectar_banco(cfg)
 
     print(f"📷 Abrindo câmera (índice {cfg.camera_index})...")
-    captura = cv2.VideoCapture(cfg.camera_index)
+    if sys.platform == "win32":
+        # No Windows, o backend padrão do OpenCV às vezes demora ou falha
+        # pra abrir a webcam. DirectShow é mais rápido e confiável lá.
+        captura = cv2.VideoCapture(cfg.camera_index, cv2.CAP_DSHOW)
+    else:
+        captura = cv2.VideoCapture(cfg.camera_index)
     if not captura.isOpened():
         raise RuntimeError("Não foi possível abrir a câmera.")
 
@@ -489,28 +527,32 @@ def main():
             else:
                 contorno_tora = extrair_contorno_tora(frame)
 
-            # Altura/Comprimento da tora (pixels -> cm via GSD):
+            # Comprimento visível ("altura" no banco) e diâmetro ("largura")
+            # da tora em pixels — os dois eixos do MESMO bounding box, cada
+            # um convertido pra cm real pela mesma função de GSD.
             if contorno_tora is not None and len(contorno_tora) > 0:
-                _, _, _, h_box = cv2.boundingRect(contorno_tora)
+                _, _, w_box, h_box = cv2.boundingRect(contorno_tora)
+                largura_px = float(w_box)
                 altura_px = float(h_box)
             else:
+                largura_px = float(frame.shape[1] * 0.2)
                 altura_px = float(frame.shape[0] * 0.7)
 
             altura_cm = calcular_dimensao_real_cm(altura_px, distancia_cm, cfg)
+            diametro_cm = calcular_dimensao_real_cm(largura_px, distancia_cm, cfg)
             densidade = calcular_densidade_estimada(forca_bruta)
             tortuosidade = calcular_tortuosidade(contorno_tora)
 
-            # Cálculo de volume útil (m³) e triagem por destino (Suzano/John Deere)
-            raio_m = (max(altura_cm * 0.25, 10.0) / 100.0) / 2.0
-            comprimento_m = max(altura_cm / 100.0, 2.5)
-            volume_bruto_m3 = float(np.pi * (raio_m ** 2) * comprimento_m)
-            volume_util_m3 = round(float(volume_bruto_m3 * confianca_saude), 3)
+            # Volume útil (m³): agora a partir do diâmetro MEDIDO, não de
+            # um chute fixo de 25% do comprimento.
+            volume_util_m3 = calcular_volume_m3(diametro_cm, altura_cm, confianca_saude)
 
             indicadores = {
                 "densidade": {"valor": densidade, "unidade": "kg/m3", "metodo": "fusao_sensores"},
                 "altura": {"valor": altura_cm, "unidade": "cm", "metodo": "imagem_gsd_ultrassom"},
+                "diametro": {"valor": diametro_cm, "unidade": "cm", "metodo": "imagem_gsd_ultrassom"},
                 "tortuosidade": {"valor": tortuosidade, "unidade": "indice", "metodo": "opencv_contorno"},
-                "volume_util": {"valor": volume_util_m3, "unidade": "m3", "metodo": "geometria_saude_ia"},
+                "volume_util": {"valor": volume_util_m3, "unidade": "m3", "metodo": "geometria_medida"},
                 "apodrecimento_pragas": {
                     "valor": round(confianca_saude * 100, 2),
                     "unidade": "%",
@@ -525,9 +567,9 @@ def main():
             emoji_status = {"aprovado": "✅", "quarentena": "⚠️", "reprovado": "❌"}[status]
             print(
                 f"{emoji_status} [{uuid_gerado[:8]}] status={status} "
-                f"saúde={confianca_saude:.2%} altura={altura_cm}cm "
+                f"saúde={confianca_saude:.2%} altura={altura_cm}cm diametro={diametro_cm}cm "
                 f"densidade={densidade}kg/m3 tortuosidade={tortuosidade} "
-                f"defeitos={len(defeitos)}"
+                f"volume={volume_util_m3}m3 defeitos={len(defeitos)}"
             )
 
             # Exibe janela visual em tempo real se solicitado
