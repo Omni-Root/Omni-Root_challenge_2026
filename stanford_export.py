@@ -4,7 +4,7 @@ Projeto: Qualidade da Madeira — Challenge FIAP x John Deere/Suzano
 
 O QUE ESTE SCRIPT FAZ
 ----------------------
-Lê o banco SQLite local (stanford_local.db, gerado pelo main.py) e gera um
+Lê o banco SQLite local (omni_root_local.db, gerado pelo main.py) e gera um
 arquivo .hpr (Harvested Production Report) por talhão, seguindo a estrutura
 oficial do StanForD 2010 descrita na documentação pública da Skogforsk:
 
@@ -40,7 +40,7 @@ qualquer uso em produção.
 USO
 ---
     python3 stanford_export.py
-    python3 stanford_export.py --db ./stanford_local.db --out ./export_stanford
+    python3 stanford_export.py --db ./omni_root_local.db --out ./export_stanford
     python3 stanford_export.py --talhao "Talhão Demo"   # exporta só um talhão
     python3 stanford_export.py --somente-pendentes      # só o que sync_status=0
 """

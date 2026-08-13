@@ -8,7 +8,7 @@ O QUE ESTE SCRIPT FAZ:
 3. Executa o modelo YOLOv8 para detecção de defeitos
 4. Simula os sensores de ultrassom (distância) e força (densidade)
 5. Aplica visão computacional para contorno e tortuosidade
-6. Salva todas as inspeções no banco SQLite local (stanford_local.db)
+6. Salva todas as inspeções no banco SQLite local (omni_root_local.db)
 7. Executa o exportador StanForD 2010 (.hpr) para demonstrar a saída oficial
 8. Exibe um relatório estatístico completo da operação
 
@@ -33,6 +33,8 @@ from main import (
     SensorSimulado,
     calcular_densidade_estimada,
     calcular_dimensao_real_cm,
+    calcular_massa_seca_kg,
+    calcular_porcentagem_casca,
     calcular_tortuosidade,
     calcular_volume_m3,
     classificar_qualidade,
@@ -141,7 +143,6 @@ def rodar_simulacao(num_toras: int = 10):
 
         # 3. Sensores & Métricas
         distancia_cm = sensores.ler_distancia_cm()
-        forca_bruta = sensores.ler_forca_bruta()
 
         contorno_tora = extrair_contorno_tora(frame)
         if contorno_tora is not None and len(contorno_tora) > 0:
@@ -154,15 +155,19 @@ def rodar_simulacao(num_toras: int = 10):
 
         altura_cm = calcular_dimensao_real_cm(altura_px, distancia_cm, cfg)
         diametro_cm = calcular_dimensao_real_cm(largura_px, distancia_cm, cfg)
-        densidade = calcular_densidade_estimada(forca_bruta)
+        densidade = calcular_densidade_estimada(cfg.clone_id)
         tortuosidade = calcular_tortuosidade(contorno_tora)
+        porcentagem_casca = calcular_porcentagem_casca(frame, contorno_tora)
         volume_util_m3 = calcular_volume_m3(diametro_cm, altura_cm, confianca_saude)
+        massa_seca_kg = calcular_massa_seca_kg(volume_util_m3, densidade)
 
         indicadores = {
-            "densidade": {"valor": densidade, "unidade": "kg/m3", "metodo": "fusao_sensores"},
+            "densidade": {"valor": densidade, "unidade": "kg/m3", "metodo": f"lookup_referencia_clone_{cfg.clone_id}"},
+            "massa_seca": {"valor": massa_seca_kg, "unidade": "kg", "metodo": "calculado_volume_x_densidade"},
             "altura": {"valor": altura_cm, "unidade": "cm", "metodo": "imagem_gsd_ultrassom"},
             "diametro": {"valor": diametro_cm, "unidade": "cm", "metodo": "imagem_gsd_ultrassom"},
             "tortuosidade": {"valor": tortuosidade, "unidade": "indice", "metodo": "opencv_contorno"},
+            "porcentagem_casca": {"valor": porcentagem_casca, "unidade": "%", "metodo": "opencv_textura_hsv"},
             "volume_util": {"valor": volume_util_m3, "unidade": "m3", "metodo": "geometria_medida"},
             "apodrecimento_pragas": {
                 "valor": round(confianca_saude * 100, 2),
@@ -192,8 +197,8 @@ def rodar_simulacao(num_toras: int = 10):
             f"Tora #{idx:02d} {emoji} [{uuid_gerado[:8]}] Status: {status:<10} | "
             f"Saúde IA: {confianca_saude:>6.1%} | Altura: {altura_cm:>5.1f}cm | "
             f"Diâmetro: {diametro_cm:>5.1f}cm | "
-            f"Densidade: {densidade:>5.1f}kg/m³ | Tortuosos.: {tortuosidade:>5.2f} | "
-            f"Volume: {volume_util_m3:>5.3f}m³ | Defeitos: {len(defeitos)}"
+            f"Densid.: {densidade:>5.1f}kg/m³ | Casca: {porcentagem_casca:>4.1f}% | "
+            f"Tortuosos.: {tortuosidade:>5.2f} | Volume: {volume_util_m3:>5.3f}m³"
         )
         time.sleep(0.1)
 
