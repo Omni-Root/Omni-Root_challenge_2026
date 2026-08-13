@@ -1,0 +1,44 @@
+{
+  "_leiame": "REFERENCIA DE LITERATURA (nao mocado, mas tambem nao e dado de laboratorio do clone especifico) -- Buscamos os codigos de clone (SP3108, SP2974 etc.) na literatura cientifica e NAO ha nenhuma correspondencia publica: sao codigos internos proprietarios da industria, o que confirma o que o contato da John Deere ja tinha dito por e-mail. Alem disso, a propria planilha de inventario (coluna Especie) esta preenchida com o proprio codigo do clone, entao nem os dados de vocês permitem saber a especie botanica real por tras de cada codigo. Por isso, TODOS os clones abaixo usam hoje o MESMO valor de referencia: a densidade basica media de hibridos comerciais de Eucalyptus grandis x E. urophylla (o material genetico mais comum em plantios industriais de celulose no Brasil), medida em pelo menos 3 fontes tecnicas/academicas reais (ver campo 'fontes' abaixo). Isso NAO e o valor real do clone especifico -- e uma aproximacao de literatura no nivel de especie/hibrido, o nivel mais fino que os dados disponiveis permitem sustentar sem inventar. Em producao real, cada clone teria seu proprio valor vindo de laudo de laboratorio (Suzano/Eldorado), substituindo esta referencia unica.",
+  "fontes": [
+    "Densidade basica media de E. grandis x E. urophylla ~0,49 g/cm3 (tese de doutorado, Caracterizacao da madeira de arvores de clones de Eucalyptus grandis, E. saligna e E. grandis x urophylla, USP, teses.usp.br/teses/disponiveis/11/11150/tde-13012005-165158)",
+    "Hibridos comerciais de E. grandis x E. urophylla com densidade proxima de 0,5 g/cm3 (Qualidade da Madeira do Eucalipto, eucalyptus.com.br/eucaliptos/PT41_Densidade_Basica_Madeira.pdf)",
+    "E. urophylla ~0,54 g/cm3 vs E. grandis ~0,49 g/cm3, Revista Arvore/SciELO (scielo.br/j/rarv/a/V3vHbRGbdf4vVzGHVjNrtVx)"
+  ],
+  "SP3108": {
+    "densidade_base": 490,
+    "unidade": "kg/m3",
+    "tipo_dado": "referencia_literatura_hibrido_comercial",
+    "observacao": "Nao e o valor real deste clone -- ver _leiame. Valor de referencia para hibrido E. grandis x E. urophylla."
+  },
+  "SP2974": {
+    "densidade_base": 490,
+    "unidade": "kg/m3",
+    "tipo_dado": "referencia_literatura_hibrido_comercial",
+    "observacao": "Nao e o valor real deste clone -- ver _leiame. Valor de referencia para hibrido E. grandis x E. urophylla."
+  },
+  "CO41H_TEST": {
+    "densidade_base": 490,
+    "unidade": "kg/m3",
+    "tipo_dado": "referencia_literatura_hibrido_comercial",
+    "observacao": "Nao e o valor real deste clone -- ver _leiame. Valor de referencia para hibrido E. grandis x E. urophylla."
+  },
+  "SP3153": {
+    "densidade_base": 490,
+    "unidade": "kg/m3",
+    "tipo_dado": "referencia_literatura_hibrido_comercial",
+    "observacao": "Nao e o valor real deste clone -- ver _leiame. Valor de referencia para hibrido E. grandis x E. urophylla."
+  },
+  "SP2887": {
+    "densidade_base": 490,
+    "unidade": "kg/m3",
+    "tipo_dado": "referencia_literatura_hibrido_comercial",
+    "observacao": "Nao e o valor real deste clone -- ver _leiame. Valor de referencia para hibrido E. grandis x E. urophylla."
+  },
+  "SP1048_TEST": {
+    "densidade_base": 490,
+    "unidade": "kg/m3",
+    "tipo_dado": "referencia_literatura_hibrido_comercial",
+    "observacao": "Nao e o valor real deste clone -- ver _leiame. Valor de referencia para hibrido E. grandis x E. urophylla."
+  }
+}

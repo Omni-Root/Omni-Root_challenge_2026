@@ -1,5 +1,5 @@
 -- ============================================================
--- SCHEMA SQLITE — Banco local no Raspberry Pi (stanford_local.db)
+-- SCHEMA SQLITE — Banco local no Raspberry Pi / Windows Embedded (omni_root_local.db)
 -- Projeto: Qualidade da Madeira — Challenge FIAP x John Deere/Suzano
 -- ============================================================
 -- Este banco roda offline na máquina florestal. O script Python

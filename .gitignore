@@ -16,8 +16,8 @@ __pycache__/
 *.sqlite
 *.sqlite3
 
-# Datasets e Imagens
-/data/
+# Datasets e Imagens brutas (pesadas, não vão pro Git)
+/data/wood_raw/
 /dataset/
 
 # Pesos do YOLO e Artefatos do Treinamento
@@ -33,3 +33,5 @@ sync_daemon_raspberry
 # Credenciais do Kaggle e Variáveis de Ambiente
 kaggle.json
 .env
+
+prompt.txt

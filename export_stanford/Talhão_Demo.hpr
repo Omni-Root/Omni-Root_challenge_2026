@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <HarvestedProduction xmlns="urn:skogforsk:StanForD2010">
   <Header messageType="hpr" nation="BR" areaUnit="ha" diameterUnit="mm" lengthUnit="cm" volumeUnit="m3sob" weightUnit="kg" version="draft_1.0">
-    <MessageId>17f039b1-11af-40fe-884b-778888846e6a</MessageId>
+    <MessageId>1d14951d-599b-4f3d-a92b-3ffb5270c70e</MessageId>
     <Sender>OmniRoot-Challenge-FIAP-JohnDeere-Suzano</Sender>
-    <SaveDate>2026-08-12T22:16:55+00:00</SaveDate>
+    <SaveDate>2026-08-13T15:46:14+00:00</SaveDate>
   </Header>
   <Machine>
     <MachineKey>3c9fbb41-82f9-53da-b254-3844ca7c6556</MachineKey>
@@ -18,33 +18,43 @@
         <StmKey>1</StmKey>
         <StmNumber>1</StmNumber>
         <SpcGrpUserId>Eucalipto</SpcGrpUserId>
-        <HarvDate>2026-08-12T19:16:55</HarvDate>
+        <HarvDate>2026-08-13T12:46:14</HarvDate>
         <Log>
           <LogKey>1</LogKey>
           <ProductKey>1</ProductKey>
           <LogMeasurement>
-            <LogLength>67.66</LogLength>
+            <LogLength>169.55</LogLength>
             <LogMeasureUnit>cm</LogMeasureUnit>
           </LogMeasurement>
         </Log>
-        <StemGrade>OK</StemGrade>
+        <StemGrade>REVISAO_MANUAL</StemGrade>
         <UserDefinedData>
           <DataTableGroup tableGroupId="QualidadeMadeiraIA" tableGroupName="Indicadores de Qualidade (IA)">
             <DataTable tableId="indicadores_qualidade">
               <Row rowId="1">
-                <ColumnData columnId="uuid_local">68820ea2-1ea2-4fcf-9aaa-4ab3c2c2eb1c</ColumnData>
-                <ColumnData columnId="log_id_original">LOG-20260812191655-6882</ColumnData>
-                <ColumnData columnId="confianca_ia">1.0</ColumnData>
-                <ColumnData columnId="status_classificacao">aprovado</ColumnData>
-                <ColumnData columnId="hash_sha256">78a2b6ead177f1010602d807287123b8e243a2c568d4254ddba458f43f8c225c</ColumnData>
-                <ColumnData columnId="densidade" unit="kg/m3" metodoMedicao="lookup_referencia_clone_SP3108">510.0</ColumnData>
-                <ColumnData columnId="massa_seca" unit="kg" metodoMedicao="calculado_volume_x_densidade">27.0</ColumnData>
-                <ColumnData columnId="altura" unit="cm" metodoMedicao="imagem_gsd_ultrassom">67.66</ColumnData>
-                <ColumnData columnId="diametro" unit="cm" metodoMedicao="imagem_gsd_ultrassom">31.61</ColumnData>
-                <ColumnData columnId="tortuosidade" unit="indice" metodoMedicao="opencv_contorno">8.76</ColumnData>
-                <ColumnData columnId="porcentagem_casca" unit="%" metodoMedicao="opencv_textura_hsv">24.9</ColumnData>
-                <ColumnData columnId="volume_util" unit="m3" metodoMedicao="geometria_medida">0.053</ColumnData>
-                <ColumnData columnId="apodrecimento_pragas" unit="%" metodoMedicao="yolo">100.0</ColumnData>
+                <ColumnData columnId="uuid_local">e17089d4-d811-4914-8e01-14be72380d55</ColumnData>
+                <ColumnData columnId="log_id_original">LOG-20260813124614-e170</ColumnData>
+                <ColumnData columnId="confianca_ia">0.6791</ColumnData>
+                <ColumnData columnId="status_classificacao">quarentena</ColumnData>
+                <ColumnData columnId="hash_sha256">1e8167f321a29621b4f2332b29ae9aa0c9e2feadac9940028a66506d4f6d63de</ColumnData>
+                <ColumnData columnId="densidade" unit="kg/m3" metodoMedicao="lookup_referencia_clone_SP3108">490.0</ColumnData>
+                <ColumnData columnId="massa_seca" unit="kg" metodoMedicao="calculado_volume_x_densidade">7393.1</ColumnData>
+                <ColumnData columnId="altura" unit="cm" metodoMedicao="imagem_gsd_ultrassom">169.55</ColumnData>
+                <ColumnData columnId="diametro" unit="cm" metodoMedicao="imagem_gsd_ultrassom">408.47</ColumnData>
+                <ColumnData columnId="tortuosidade" unit="indice" metodoMedicao="opencv_contorno">19.97</ColumnData>
+                <ColumnData columnId="porcentagem_casca" unit="%" metodoMedicao="opencv_textura_hsv">1.2</ColumnData>
+                <ColumnData columnId="volume_util" unit="m3" metodoMedicao="geometria_medida">15.088</ColumnData>
+                <ColumnData columnId="apodrecimento_pragas" unit="%" metodoMedicao="yolo">67.91</ColumnData>
+              </Row>
+            </DataTable>
+            <DataTable tableId="defeitos_detectados">
+              <Row rowId="1">
+                <ColumnData columnId="tipo_defeito">wood_defect</ColumnData>
+                <ColumnData columnId="confianca">0.6418</ColumnData>
+                <ColumnData columnId="pos_x">1331.57</ColumnData>
+                <ColumnData columnId="pos_y">516.41</ColumnData>
+                <ColumnData columnId="largura">65.8</ColumnData>
+                <ColumnData columnId="altura">55.59</ColumnData>
               </Row>
             </DataTable>
           </DataTableGroup>
@@ -54,33 +64,245 @@
         <StmKey>2</StmKey>
         <StmNumber>2</StmNumber>
         <SpcGrpUserId>Eucalipto</SpcGrpUserId>
-        <HarvDate>2026-08-12T19:16:55</HarvDate>
+        <HarvDate>2026-08-13T12:46:14</HarvDate>
         <Log>
           <LogKey>1</LogKey>
           <ProductKey>1</ProductKey>
           <LogMeasurement>
-            <LogLength>88.23</LogLength>
+            <LogLength>93.34</LogLength>
             <LogMeasureUnit>cm</LogMeasureUnit>
           </LogMeasurement>
         </Log>
-        <StemGrade>OK</StemGrade>
+        <StemGrade>REJEITADO</StemGrade>
         <UserDefinedData>
           <DataTableGroup tableGroupId="QualidadeMadeiraIA" tableGroupName="Indicadores de Qualidade (IA)">
             <DataTable tableId="indicadores_qualidade">
               <Row rowId="1">
-                <ColumnData columnId="uuid_local">8b79f7e5-2062-4668-82ac-c0bad5d2b86a</ColumnData>
-                <ColumnData columnId="log_id_original">LOG-20260812191655-8b79</ColumnData>
-                <ColumnData columnId="confianca_ia">1.0</ColumnData>
-                <ColumnData columnId="status_classificacao">aprovado</ColumnData>
-                <ColumnData columnId="hash_sha256">d393fe7b7365ea9add51c8cafe1490cdad53c84fe471fe8856b76b1c17e593c7</ColumnData>
-                <ColumnData columnId="densidade" unit="kg/m3" metodoMedicao="lookup_referencia_clone_SP3108">510.0</ColumnData>
-                <ColumnData columnId="massa_seca" unit="kg" metodoMedicao="calculado_volume_x_densidade">80.6</ColumnData>
-                <ColumnData columnId="altura" unit="cm" metodoMedicao="imagem_gsd_ultrassom">88.23</ColumnData>
-                <ColumnData columnId="diametro" unit="cm" metodoMedicao="imagem_gsd_ultrassom">47.7</ColumnData>
-                <ColumnData columnId="tortuosidade" unit="indice" metodoMedicao="opencv_contorno">9.4</ColumnData>
-                <ColumnData columnId="porcentagem_casca" unit="%" metodoMedicao="opencv_textura_hsv">23.2</ColumnData>
-                <ColumnData columnId="volume_util" unit="m3" metodoMedicao="geometria_medida">0.158</ColumnData>
-                <ColumnData columnId="apodrecimento_pragas" unit="%" metodoMedicao="yolo">100.0</ColumnData>
+                <ColumnData columnId="uuid_local">fc4e6811-bfea-4631-9d19-13f7a7bc6c2a</ColumnData>
+                <ColumnData columnId="log_id_original">LOG-20260813124614-fc4e</ColumnData>
+                <ColumnData columnId="confianca_ia">0.6233</ColumnData>
+                <ColumnData columnId="status_classificacao">reprovado</ColumnData>
+                <ColumnData columnId="hash_sha256">83b3e15a9bb627aa2e9f8ec5d9e7e00ce41d762f93c18d6fa6c0330eb8718c7d</ColumnData>
+                <ColumnData columnId="densidade" unit="kg/m3" metodoMedicao="lookup_referencia_clone_SP3108">490.0</ColumnData>
+                <ColumnData columnId="massa_seca" unit="kg" metodoMedicao="calculado_volume_x_densidade">1146.1</ColumnData>
+                <ColumnData columnId="altura" unit="cm" metodoMedicao="imagem_gsd_ultrassom">93.34</ColumnData>
+                <ColumnData columnId="diametro" unit="cm" metodoMedicao="imagem_gsd_ultrassom">226.24</ColumnData>
+                <ColumnData columnId="tortuosidade" unit="indice" metodoMedicao="opencv_contorno">25.33</ColumnData>
+                <ColumnData columnId="porcentagem_casca" unit="%" metodoMedicao="opencv_textura_hsv">1.2</ColumnData>
+                <ColumnData columnId="volume_util" unit="m3" metodoMedicao="geometria_medida">2.339</ColumnData>
+                <ColumnData columnId="apodrecimento_pragas" unit="%" metodoMedicao="yolo">62.33</ColumnData>
+              </Row>
+            </DataTable>
+            <DataTable tableId="defeitos_detectados">
+              <Row rowId="1">
+                <ColumnData columnId="tipo_defeito">wood_defect</ColumnData>
+                <ColumnData columnId="confianca">0.7535</ColumnData>
+                <ColumnData columnId="pos_x">150.99</ColumnData>
+                <ColumnData columnId="pos_y">54.56</ColumnData>
+                <ColumnData columnId="largura">815.9</ColumnData>
+                <ColumnData columnId="altura">204.36</ColumnData>
+              </Row>
+              <Row rowId="2">
+                <ColumnData columnId="tipo_defeito">wood_defect</ColumnData>
+                <ColumnData columnId="confianca">0.6764</ColumnData>
+                <ColumnData columnId="pos_x">1644.47</ColumnData>
+                <ColumnData columnId="pos_y">380.69</ColumnData>
+                <ColumnData columnId="largura">63.13</ColumnData>
+                <ColumnData columnId="altura">148.12</ColumnData>
+              </Row>
+              <Row rowId="3">
+                <ColumnData columnId="tipo_defeito">wood_defect</ColumnData>
+                <ColumnData columnId="confianca">0.5217</ColumnData>
+                <ColumnData columnId="pos_x">1282.3</ColumnData>
+                <ColumnData columnId="pos_y">9.68</ColumnData>
+                <ColumnData columnId="largura">68.13</ColumnData>
+                <ColumnData columnId="altura">51.49</ColumnData>
+              </Row>
+              <Row rowId="4">
+                <ColumnData columnId="tipo_defeito">wood_defect</ColumnData>
+                <ColumnData columnId="confianca">0.427</ColumnData>
+                <ColumnData columnId="pos_x">1204.65</ColumnData>
+                <ColumnData columnId="pos_y">4.68</ColumnData>
+                <ColumnData columnId="largura">45.95</ColumnData>
+                <ColumnData columnId="altura">111.52</ColumnData>
+              </Row>
+              <Row rowId="5">
+                <ColumnData columnId="tipo_defeito">wood_defect</ColumnData>
+                <ColumnData columnId="confianca">0.4088</ColumnData>
+                <ColumnData columnId="pos_x">1055.27</ColumnData>
+                <ColumnData columnId="pos_y">96.69</ColumnData>
+                <ColumnData columnId="largura">195.89</ColumnData>
+                <ColumnData columnId="altura">927.31</ColumnData>
+              </Row>
+            </DataTable>
+          </DataTableGroup>
+        </UserDefinedData>
+      </Stem>
+      <Stem>
+        <StmKey>3</StmKey>
+        <StmNumber>3</StmNumber>
+        <SpcGrpUserId>Eucalipto</SpcGrpUserId>
+        <HarvDate>2026-08-13T12:46:14</HarvDate>
+        <Log>
+          <LogKey>1</LogKey>
+          <ProductKey>1</ProductKey>
+          <LogMeasurement>
+            <LogLength>168.13</LogLength>
+            <LogMeasureUnit>cm</LogMeasureUnit>
+          </LogMeasurement>
+        </Log>
+        <StemGrade>REJEITADO</StemGrade>
+        <UserDefinedData>
+          <DataTableGroup tableGroupId="QualidadeMadeiraIA" tableGroupName="Indicadores de Qualidade (IA)">
+            <DataTable tableId="indicadores_qualidade">
+              <Row rowId="1">
+                <ColumnData columnId="uuid_local">abbb0866-4bb3-445c-9c6d-bd0a7d440c38</ColumnData>
+                <ColumnData columnId="log_id_original">LOG-20260813124614-abbb</ColumnData>
+                <ColumnData columnId="confianca_ia">0.5714</ColumnData>
+                <ColumnData columnId="status_classificacao">reprovado</ColumnData>
+                <ColumnData columnId="hash_sha256">86e3cee69a9230f9e664bbbacc78da8c4ccd0df25231dc9de1dd2eab6a6bc0ad</ColumnData>
+                <ColumnData columnId="densidade" unit="kg/m3" metodoMedicao="lookup_referencia_clone_SP3108">490.0</ColumnData>
+                <ColumnData columnId="massa_seca" unit="kg" metodoMedicao="calculado_volume_x_densidade">6135.3</ColumnData>
+                <ColumnData columnId="altura" unit="cm" metodoMedicao="imagem_gsd_ultrassom">168.13</ColumnData>
+                <ColumnData columnId="diametro" unit="cm" metodoMedicao="imagem_gsd_ultrassom">407.36</ColumnData>
+                <ColumnData columnId="tortuosidade" unit="indice" metodoMedicao="opencv_contorno">26.33</ColumnData>
+                <ColumnData columnId="porcentagem_casca" unit="%" metodoMedicao="opencv_textura_hsv">1.5</ColumnData>
+                <ColumnData columnId="volume_util" unit="m3" metodoMedicao="geometria_medida">12.521</ColumnData>
+                <ColumnData columnId="apodrecimento_pragas" unit="%" metodoMedicao="yolo">57.14</ColumnData>
+              </Row>
+            </DataTable>
+            <DataTable tableId="defeitos_detectados">
+              <Row rowId="1">
+                <ColumnData columnId="tipo_defeito">wood_defect</ColumnData>
+                <ColumnData columnId="confianca">0.8573</ColumnData>
+                <ColumnData columnId="pos_x">160.49</ColumnData>
+                <ColumnData columnId="pos_y">877.86</ColumnData>
+                <ColumnData columnId="largura">230.1</ColumnData>
+                <ColumnData columnId="altura">114.26</ColumnData>
+              </Row>
+              <Row rowId="2">
+                <ColumnData columnId="tipo_defeito">wood_defect</ColumnData>
+                <ColumnData columnId="confianca">0.7578</ColumnData>
+                <ColumnData columnId="pos_x">2489.59</ColumnData>
+                <ColumnData columnId="pos_y">844.99</ColumnData>
+                <ColumnData columnId="largura">142.36</ColumnData>
+                <ColumnData columnId="altura">154.99</ColumnData>
+              </Row>
+              <Row rowId="3">
+                <ColumnData columnId="tipo_defeito">wood_defect</ColumnData>
+                <ColumnData columnId="confianca">0.7536</ColumnData>
+                <ColumnData columnId="pos_x">1929.43</ColumnData>
+                <ColumnData columnId="pos_y">843.37</ColumnData>
+                <ColumnData columnId="largura">166.73</ColumnData>
+                <ColumnData columnId="altura">85.29</ColumnData>
+              </Row>
+            </DataTable>
+          </DataTableGroup>
+        </UserDefinedData>
+      </Stem>
+      <Stem>
+        <StmKey>4</StmKey>
+        <StmNumber>4</StmNumber>
+        <SpcGrpUserId>Eucalipto</SpcGrpUserId>
+        <HarvDate>2026-08-13T12:46:14</HarvDate>
+        <Log>
+          <LogKey>1</LogKey>
+          <ProductKey>1</ProductKey>
+          <LogMeasurement>
+            <LogLength>115.39</LogLength>
+            <LogMeasureUnit>cm</LogMeasureUnit>
+          </LogMeasurement>
+        </Log>
+        <StemGrade>REJEITADO</StemGrade>
+        <UserDefinedData>
+          <DataTableGroup tableGroupId="QualidadeMadeiraIA" tableGroupName="Indicadores de Qualidade (IA)">
+            <DataTable tableId="indicadores_qualidade">
+              <Row rowId="1">
+                <ColumnData columnId="uuid_local">421a3e49-d919-4fe6-9dca-291af37130d1</ColumnData>
+                <ColumnData columnId="log_id_original">LOG-20260813124614-421a</ColumnData>
+                <ColumnData columnId="confianca_ia">0.586</ColumnData>
+                <ColumnData columnId="status_classificacao">reprovado</ColumnData>
+                <ColumnData columnId="hash_sha256">b8b0e3f953e50d3184b5a94d347b4e71c1112f1fde9672eb7a36aaabfa71bbcf</ColumnData>
+                <ColumnData columnId="densidade" unit="kg/m3" metodoMedicao="lookup_referencia_clone_SP3108">490.0</ColumnData>
+                <ColumnData columnId="massa_seca" unit="kg" metodoMedicao="calculado_volume_x_densidade">2025.7</ColumnData>
+                <ColumnData columnId="altura" unit="cm" metodoMedicao="imagem_gsd_ultrassom">115.39</ColumnData>
+                <ColumnData columnId="diametro" unit="cm" metodoMedicao="imagem_gsd_ultrassom">279.01</ColumnData>
+                <ColumnData columnId="tortuosidade" unit="indice" metodoMedicao="opencv_contorno">25.39</ColumnData>
+                <ColumnData columnId="porcentagem_casca" unit="%" metodoMedicao="opencv_textura_hsv">1.2</ColumnData>
+                <ColumnData columnId="volume_util" unit="m3" metodoMedicao="geometria_medida">4.134</ColumnData>
+                <ColumnData columnId="apodrecimento_pragas" unit="%" metodoMedicao="yolo">58.6</ColumnData>
+              </Row>
+            </DataTable>
+            <DataTable tableId="defeitos_detectados">
+              <Row rowId="1">
+                <ColumnData columnId="tipo_defeito">wood_defect</ColumnData>
+                <ColumnData columnId="confianca">0.828</ColumnData>
+                <ColumnData columnId="pos_x">151.55</ColumnData>
+                <ColumnData columnId="pos_y">145.96</ColumnData>
+                <ColumnData columnId="largura">99.65</ColumnData>
+                <ColumnData columnId="altura">109.6</ColumnData>
+              </Row>
+              <Row rowId="2">
+                <ColumnData columnId="tipo_defeito">wood_defect</ColumnData>
+                <ColumnData columnId="confianca">0.6316</ColumnData>
+                <ColumnData columnId="pos_x">1102.04</ColumnData>
+                <ColumnData columnId="pos_y">479.66</ColumnData>
+                <ColumnData columnId="largura">96.55</ColumnData>
+                <ColumnData columnId="altura">60.04</ColumnData>
+              </Row>
+            </DataTable>
+          </DataTableGroup>
+        </UserDefinedData>
+      </Stem>
+      <Stem>
+        <StmKey>5</StmKey>
+        <StmNumber>5</StmNumber>
+        <SpcGrpUserId>Eucalipto</SpcGrpUserId>
+        <HarvDate>2026-08-13T12:46:14</HarvDate>
+        <Log>
+          <LogKey>1</LogKey>
+          <ProductKey>1</ProductKey>
+          <LogMeasurement>
+            <LogLength>126.15</LogLength>
+            <LogMeasureUnit>cm</LogMeasureUnit>
+          </LogMeasurement>
+        </Log>
+        <StemGrade>REVISAO_MANUAL</StemGrade>
+        <UserDefinedData>
+          <DataTableGroup tableGroupId="QualidadeMadeiraIA" tableGroupName="Indicadores de Qualidade (IA)">
+            <DataTable tableId="indicadores_qualidade">
+              <Row rowId="1">
+                <ColumnData columnId="uuid_local">e1850324-c38e-4ea0-9593-7d82491bf3c6</ColumnData>
+                <ColumnData columnId="log_id_original">LOG-20260813124614-e185</ColumnData>
+                <ColumnData columnId="confianca_ia">0.685</ColumnData>
+                <ColumnData columnId="status_classificacao">quarentena</ColumnData>
+                <ColumnData columnId="hash_sha256">0b239fa932fc5131426d6bb3c7246e0e4323295a31086b1ff9f8009b4c742a48</ColumnData>
+                <ColumnData columnId="densidade" unit="kg/m3" metodoMedicao="lookup_referencia_clone_SP3108">490.0</ColumnData>
+                <ColumnData columnId="massa_seca" unit="kg" metodoMedicao="calculado_volume_x_densidade">3091.9</ColumnData>
+                <ColumnData columnId="altura" unit="cm" metodoMedicao="imagem_gsd_ultrassom">126.15</ColumnData>
+                <ColumnData columnId="diametro" unit="cm" metodoMedicao="imagem_gsd_ultrassom">304.91</ColumnData>
+                <ColumnData columnId="tortuosidade" unit="indice" metodoMedicao="opencv_contorno">23.82</ColumnData>
+                <ColumnData columnId="porcentagem_casca" unit="%" metodoMedicao="opencv_textura_hsv">1.2</ColumnData>
+                <ColumnData columnId="volume_util" unit="m3" metodoMedicao="geometria_medida">6.31</ColumnData>
+                <ColumnData columnId="apodrecimento_pragas" unit="%" metodoMedicao="yolo">68.5</ColumnData>
+              </Row>
+            </DataTable>
+            <DataTable tableId="defeitos_detectados">
+              <Row rowId="1">
+                <ColumnData columnId="tipo_defeito">wood_defect</ColumnData>
+                <ColumnData columnId="confianca">0.6299</ColumnData>
+                <ColumnData columnId="pos_x">1431.22</ColumnData>
+                <ColumnData columnId="pos_y">0.0</ColumnData>
+                <ColumnData columnId="largura">106.34</ColumnData>
+                <ColumnData columnId="altura">51.01</ColumnData>
+              </Row>
+              <Row rowId="2">
+                <ColumnData columnId="tipo_defeito">wood_defect</ColumnData>
+                <ColumnData columnId="confianca">0.6152</ColumnData>
+                <ColumnData columnId="pos_x">1154.45</ColumnData>
+                <ColumnData columnId="pos_y">60.12</ColumnData>
+                <ColumnData columnId="largura">55.16</ColumnData>
+                <ColumnData columnId="altura">378.7</ColumnData>
               </Row>
             </DataTable>
           </DataTableGroup>

@@ -8,7 +8,7 @@ O QUE ESTE SCRIPT FAZ:
 3. Executa o modelo YOLOv8 para detecção de defeitos
 4. Simula os sensores de ultrassom (distância) e força (densidade)
 5. Aplica visão computacional para contorno e tortuosidade
-6. Salva todas as inspeções no banco SQLite local (stanford_local.db)
+6. Salva todas as inspeções no banco SQLite local (omni_root_local.db)
 7. Executa o exportador StanForD 2010 (.hpr) para demonstrar a saída oficial
 8. Exibe um relatório estatístico completo da operação
 

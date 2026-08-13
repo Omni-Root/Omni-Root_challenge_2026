@@ -338,11 +338,20 @@ def calcular_densidade_estimada(clone_id: str, inventario_stats: dict | None = N
 
 def calcular_porcentagem_casca(frame: np.ndarray | None, contorno: np.ndarray | None) -> float:
     """
-    Mede a proporção da área de casca (%) em relação à seção da tora via OpenCV
-    analisando o perímetro e a textura do contorno.
+    Mede a proporção da área de casca (%) em relação à seção da tora via OpenCV,
+    analisando a diferença entre a área total do contorno e a região interna
+    (obtida por erosão morfológica).
+
+    Para eucalipto comercial, a faixa típica fica entre 8% e 20%. Valores fora
+    dessa faixa não são impossíveis (tora descascada = ~2%, casca muito grossa
+    ou contorno mal segmentado = >25%), mas geram um aviso no log.
+
+    Retorna o valor REAL medido, sem clamp — se o número parecer estranho, é
+    sinal de que o contorno precisa de ajuste, não de que devemos esconder a
+    medida.
     """
     if frame is None or contorno is None or len(contorno) < 5:
-        return 12.5
+        return 0.0  # sem dados suficientes para medir — retorna 0 (desconhecido)
 
     try:
         mask = np.zeros(frame.shape[:2], dtype=np.uint8)
@@ -360,12 +369,21 @@ def calcular_porcentagem_casca(frame: np.ndarray | None, contorno: np.ndarray | 
         area_casca = float(np.count_nonzero(mask_casca))
 
         if area_total <= 0:
-            return 12.5
+            return 0.0
 
         pct = (area_casca / area_total) * 100.0
-        return round(float(np.clip(pct, 5.0, 30.0)), 1)
+        pct = round(float(pct), 1)
+
+        # Aviso de outlier (não bloqueia, só informa)
+        if pct < 5.0 or pct > 30.0:
+            print(
+                f"⚠️  Porcentagem de casca fora da faixa típica de eucalipto "
+                f"(8-20%): {pct}%. Verifique a segmentação do contorno."
+            )
+
+        return pct
     except Exception:
-        return 12.5
+        return 0.0
 
 
 def extrair_contorno_tora(frame: np.ndarray) -> np.ndarray | None:
@@ -465,10 +483,17 @@ def extrair_defeitos_yolo(resultado, cfg: Config, frame_shape: tuple | None = No
 
 def classificar_qualidade(confianca_saude: float, defeitos: list, cfg: Config) -> str:
     """
-    Aplica a regra de negócio florestal:
-      - Sem defeito significativo + saúde alta (>= 85%) -> aprovado
-      - Defeitos moderados ou incerteza (60% a 85%)      -> quarentena (revisão manual)
-      - Defeito grave (área ocupada > 5% ou podridão)    -> reprovado
+    Aplica a regra de negócio florestal (triagem Suzano / John Deere):
+
+      1. Podridão ou praga com confiança >= 70%           -> reprovado (direto)
+      2. Defeito extenso (>= 5% da área do frame)         -> reprovado
+      3. Saúde abaixo de 60% (limiar_quarentena)           -> reprovado
+      4. Sem defeitos E saúde >= 85% (limiar_aprovacao)    -> aprovado
+      5. Qualquer outro caso (zona cinza)                  -> quarentena (revisão manual)
+
+    A quarentena cobre toras com saúde entre 60% e 85%, ou toras
+    saudáveis (>= 85%) que tenham defeitos leves detectados — são
+    casos que o operador precisa olhar antes de decidir o destino.
     """
     # 1. Podridão grave em modelo multiclasse
     tem_podridao = any(
@@ -478,7 +503,7 @@ def classificar_qualidade(confianca_saude: float, defeitos: list, cfg: Config) -
     if tem_podridao:
         return "reprovado"
 
-    # 2. Defeito extenso em modelo de classe única (wood_defect)
+    # 2. Defeito extenso (>= 5% da área do frame com confiança alta)
     tem_defeito_extenso = any(
         d.get("area_relativa", 0.0) >= 0.05 and d["confianca"] >= 0.65
         for d in defeitos
@@ -486,15 +511,16 @@ def classificar_qualidade(confianca_saude: float, defeitos: list, cfg: Config) -
     if tem_defeito_extenso:
         return "reprovado"
 
-    # 3. Tora saudável
-    if not defeitos and confianca_saude >= cfg.limiar_aprovacao:
+    # 3. Saúde muito baixa — abaixo do limiar de quarentena
+    if confianca_saude < cfg.limiar_quarentena:
+        return "reprovado"
+
+    # 4. Tora limpa e saudável — sem defeitos detectados
+    if confianca_saude >= cfg.limiar_aprovacao and len(defeitos) == 0:
         return "aprovado"
 
-    # 4. Quarentena
-    if confianca_saude >= cfg.limiar_quarentena or len(defeitos) <= 2:
-        return "quarentena"
-
-    return "reprovado"
+    # 5. Zona cinza: saúde entre 60%-85%, ou saúde alta mas com defeitos leves
+    return "quarentena"
 
 
 
