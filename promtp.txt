@@ -1,5 +1,0 @@
-Seguinte, isso aqui é um projeto da faculdade. Minha faculdade tem o seguinte modelo de avaliação. Todo ano tem uma coisa chamada challenge. Basicamente pegam uma empresa parceira e a empresa propoe um desafio, nós desenvolvemos e no final apresentamos.
-Esse ano a empresa parceira é a Jhon deere, junto com suzano e mais uma. Eram 5 desafios sorteados para as equipes. Minha equipe ficou com um de verificar a qualidade da madeira.
-O que nós pensamos de solução era uma camera acoplada nas máquinas da jhon deere que, através de visão computacional, verificam a qualidade da madeira e então salva num banco local sqlite, quando tiver internet(em areas florestais é comum não ter internet) disponivel eles mandam para um postgresql e então teria uma dashboard verificando as informações e atualizando conforme ia lendo do banco.
-Como não temos acesso as maquinas da jhon deere, para nossa maquete a gente ia acoplar a camera num raspberry, a IA e o banco sqlite iam estar nesse raspberry tbm.
-Para a jhon deere, eu sei que as maquinas deles rodam windows embbeded, então acho que na pratica fica mais fácil
