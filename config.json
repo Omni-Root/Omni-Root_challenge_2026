@@ -1,0 +1,18 @@
+{
+  "maquina_id": "RASPI-DEMO-01",
+  "talhao_id": "Talhão Demo",
+  "clone_id": "SP3108",
+  "idade_talhao_anos": 5.3,
+  "sqlite_path": "./omni_root_local.db",
+  "modelo_ncnn_path": "./models/wood_ncnn_model",
+  "conf_threshold": 0.40,
+  "iou_threshold": 0.55,
+  "imgsz": 640,
+  "camera_index": 0,
+  "intervalo_captura_seg": 2.0,
+  "limiar_aprovacao": 0.85,
+  "limiar_quarentena": 0.60,
+  "distancia_focal_mm": 4.0,
+  "largura_sensor_mm": 6.3,
+  "largura_imagem_px": 640
+}

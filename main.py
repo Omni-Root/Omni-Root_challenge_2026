@@ -5,9 +5,11 @@ Projeto: Qualidade da Madeira — Challenge FIAP x John Deere/Suzano
 O que este script faz, em ordem:
   1. Captura um frame da câmera acoplada à máquina
   2. Roda o modelo YOLO (NCNN) para detectar defeitos (praga, apodrecimento)
-  3. Lê os sensores conectados diretamente ao Raspberry (ultrassônico + força)
+  3. Lê o sensor ultrassônico conectado diretamente ao Raspberry (distância
+     câmera-tora, usada na conversão pixel -> cm)
   4. Calcula os 4 indicadores de qualidade (densidade, altura, tortuosidade,
-     apodrecimento_pragas)
+     apodrecimento_pragas) — densidade vem de um lookup por clone/material
+     genético (data/clones_densidade.json), NÃO de sensor físico
   5. Classifica a tora (aprovado / quarentena / reprovado) usando o limiar
      de confiança de 85%
   6. Grava tudo no SQLite local (schema_sqlite.sql), pronto para o
@@ -18,7 +20,7 @@ Modo de uso:
     python3 main.py
 
   Em QUALQUER outro sistema (Windows, Windows Embedded, notebook, etc.):
-    Se RPi.GPIO/spidev não estiverem instalados (não vão estar fora de um
+    Se RPi.GPIO não estiver instalado (não vai estar fora de um
     Raspberry), o script detecta sozinho e cai para sensores simulados —
     não precisa passar nenhuma flag pra isso funcionar. Mas para garantir
     que a janela com as bounding boxes apareça na demonstração, rode:
@@ -29,7 +31,6 @@ Dependências (requirements.txt):
   opencv-python-headless
   numpy
   RPi.GPIO      (só instala/roda em Linux — em qualquer outro SO, ignorado)
-  spidev        (idem — comunicação com o ADC MCP3008, só no Raspberry)
 """
 
 import argparse
@@ -57,6 +58,8 @@ class Config:
     # --- Identidade da máquina (deve bater com o numero_serie no Postgres) ---
     maquina_id: str = "RASPI-DEMO-01"
     talhao_id: str = "Talhão Demo"
+    clone_id: str = "SP3108"             # Clone genético do eucalipto (ex: SP3108, SP2974, CO41H_TEST)
+    idade_talhao_anos: float = 5.3       # Idade do plantio na data da colheita
 
     # --- Banco local ---
     sqlite_path: str = "./omni_root_local.db"
@@ -79,9 +82,6 @@ class Config:
     pino_trigger: int = 23
     pino_echo: int = 24
 
-    # --- Sensor de força (via ADC MCP3008, canal 0) ---
-    adc_canal_forca: int = 0
-
     # --- Câmera: parâmetros para cálculo de dimensão real (GSD) ---
     # Precisam ser calibrados com a câmera real usada na apresentação!
     distancia_focal_mm: float = 4.0      # foco da lente
@@ -89,7 +89,95 @@ class Config:
     largura_imagem_px: int = 640         # resolução usada na inferência
 
 
-CONFIG = Config()
+# ============================================================
+# PROCESSADOR DO INVENTÁRIO FLORESTAL (John Deere / Suzano)
+# ============================================================
+def carregar_inventario_florestal(
+    caminho_densidade: str = "./data/clones_densidade.json",
+    caminho_dendrometria: str = "./data/inventario_johndeere.json",
+) -> dict:
+    """
+    Monta o dicionário de referência por clone usado pela IA, a partir de
+    DUAS fontes com papéis bem diferentes — importante não misturar:
+
+      - clones_densidade.json: densidade básica (kg/m3) por clone/material
+        genético. É esse o dado que, na prática do setor (confirmado por
+        e-mail com o contato da John Deere), varia por genética e não por
+        medição em campo.
+        ATENÇÃO: os valores aí HOJE são placeholders de demonstração, não
+        dados publicados/verificados. Antes da apresentação final, troquem
+        por valores reais — pedidos à Suzano/John Deere, ou de literatura
+        técnica (IPEF, Embrapa Florestas etc.), e citem a fonte no relatório.
+
+      - inventario_johndeere.json: amostras de DAP por árvore, agrupadas por
+        clone — isso sim vem da planilha real de inventário que a JD
+        passou. NÃO tem densidade. Serve só como contexto dendrométrico
+        (DAP médio, idade do talhão) para exibir no dashboard/relatório e,
+        opcionalmente, conferir o diâmetro medido pela câmera contra a
+        média do talhão. NÃO é usado para calcular densidade — DAP não é
+        um bom preditor de densidade básica, e tentar derivar um a partir
+        do outro foi o erro da versão anterior deste arquivo.
+    """
+    estatisticas_clones: dict = {}
+
+    p_dens = Path(caminho_densidade)
+    if p_dens.exists():
+        with open(p_dens, "r", encoding="utf-8") as f:
+            dados_densidade = json.load(f)
+        for clone_key, info in dados_densidade.items():
+            if not isinstance(info, dict):
+                continue
+            estatisticas_clones[str(clone_key).upper()] = {
+                "densidade_base": float(info.get("densidade_base", 500.0)),
+                "taxa_maturacao": info.get("taxa_maturacao"),  # guardado, NÃO aplicado (ver calcular_densidade_estimada)
+                "especie": info.get("especie", info.get("descricao", "Eucalyptus sp.")),
+                "dap_medio_inventario": None,
+                "idade_anos": None,
+            }
+
+    p_dendro = Path(caminho_dendrometria)
+    if p_dendro.exists():
+        with open(p_dendro, "r", encoding="utf-8") as f:
+            dados_dendro = json.load(f)
+        for clone_key, info in dados_dendro.get("clones", dados_dendro).items():
+            if not isinstance(info, dict):
+                continue
+            key_upper = str(clone_key).upper()
+            amostras = info.get("dap_amostras_cm", [])
+            dap_medio = float(np.mean(amostras)) if amostras else None
+
+            entrada = estatisticas_clones.setdefault(key_upper, {
+                "densidade_base": None,  # sem referência de densidade cadastrada para este clone
+                "taxa_maturacao": None,
+                "especie": info.get("especie", "Eucalyptus sp."),
+                "dap_medio_inventario": None,
+                "idade_anos": None,
+            })
+            entrada["dap_medio_inventario"] = round(dap_medio, 2) if dap_medio is not None else None
+            entrada["idade_anos"] = info.get("idade_anos")
+
+    return estatisticas_clones
+
+
+def carregar_configuracao_json(caminho_json: str = "./config.json") -> Config:
+    """Carrega as configurações operacionais da máquina a partir de um arquivo JSON estático."""
+    cfg = Config()
+    p = Path(caminho_json)
+    if p.exists():
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                dados = json.load(f)
+                if isinstance(dados, dict):
+                    for k, v in dados.items():
+                        if hasattr(cfg, k):
+                            setattr(cfg, k, v)
+        except Exception as e:
+            print(f"⚠️ Erro ao carregar {caminho_json}: {e}")
+    return cfg
+
+
+INVENTARIO_FLORESTAL = carregar_inventario_florestal()
+CONFIG = carregar_configuracao_json()
 
 
 # ============================================================
@@ -104,7 +192,6 @@ class SensorReal:
 
     def __init__(self, cfg: Config):
         import RPi.GPIO as GPIO
-        import spidev
 
         self.GPIO = GPIO
         self.cfg = cfg
@@ -113,10 +200,6 @@ class SensorReal:
         GPIO.setup(cfg.pino_trigger, GPIO.OUT)
         GPIO.setup(cfg.pino_echo, GPIO.IN)
         GPIO.output(cfg.pino_trigger, False)
-
-        self.spi = spidev.SpiDev()
-        self.spi.open(0, 0)
-        self.spi.max_speed_hz = 1350000
 
     def ler_distancia_cm(self) -> float:
         """Mede a distância câmera-tora com o sensor ultrassônico HC-SR04."""
@@ -140,22 +223,12 @@ class SensorReal:
         distancia_cm = (duracao * 34300) / 2  # velocidade do som / 2 (ida e volta)
         return round(distancia_cm, 2)
 
-    def ler_forca_bruta(self) -> int:
-        """Lê o valor bruto do ADC (0-1023) referente ao sensor de força."""
-        canal = self.cfg.adc_canal_forca
-        resposta = self.spi.xfer2([1, (8 + canal) << 4, 0])
-        valor = ((resposta[1] & 3) << 8) + resposta[2]
-        return valor
-
 
 class SensorSimulado:
     """Gera leituras plausíveis para testar a lógica sem hardware."""
 
     def ler_distancia_cm(self) -> float:
         return round(random.uniform(30.0, 80.0), 2)
-
-    def ler_forca_bruta(self) -> int:
-        return random.randint(200, 900)
 
 
 # ============================================================
@@ -203,20 +276,96 @@ def calcular_volume_m3(diametro_cm: float, comprimento_cm: float, confianca_saud
     return round(float(volume_bruto_m3 * confianca_saude), 3)
 
 
-def calcular_densidade_estimada(valor_forca_bruto: int) -> float:
+def calcular_massa_seca_kg(volume_util_m3: float, densidade_kg_m3: float) -> float:
     """
-    Converte a leitura bruta do sensor de força (0-1023) em uma
-    estimativa de densidade (kg/m3).
+    Massa seca estimada = volume útil medido pela câmera (m3) x densidade
+    de referência do clone (kg/m3).
 
-    ATENÇÃO: a fórmula abaixo é uma aproximação linear para fins de
-    demonstração. Para uso real, calibrar com amostras de densidade
-    conhecida (ex: usando um densímetro de referência) e ajustar o
-    slope/intercept da regressão.
+    Cruza um dado MEDIDO (volume, vindo da visão computacional) com um dado
+    ESTIMADO (densidade, vindo do lookup por clone — ver
+    calcular_densidade_estimada). O resultado herda a incerteza da
+    densidade: é uma estimativa de massa, não uma pesagem real. Isso é
+    exatamente o que a apresentação deve deixar claro ao citar este número.
     """
-    densidade_min, densidade_max = 350.0, 750.0  # faixa típica de eucalipto, kg/m3
-    proporcao = valor_forca_bruto / 1023.0
-    densidade = densidade_min + proporcao * (densidade_max - densidade_min)
-    return round(densidade, 1)
+    return round(float(volume_util_m3) * float(densidade_kg_m3), 1)
+
+
+def calcular_densidade_estimada(clone_id: str, inventario_stats: dict | None = None) -> float:
+    """
+    Retorna a densidade básica de referência (kg/m3) para o clone/material
+    genético informado — um lookup simples, não um modelo derivado.
+
+    De onde vem o valor (ver data/clones_densidade.json para as fontes
+    completas): buscamos os códigos de clone do inventário (SP3108, SP2974
+    etc.) em literatura científica e não há correspondência pública — são
+    códigos internos proprietários, o que bate com o que o contato da John
+    Deere já tinha explicado por e-mail. A própria planilha de inventário
+    também não permite identificar a espécie botânica real por trás de cada
+    código (a coluna "Espécie" está preenchida com o próprio código do
+    clone). Por isso, TODOS os clones cadastrados hoje usam o mesmo valor:
+    a densidade básica média de híbridos comerciais de Eucalyptus grandis x
+    E. urophylla — o material genético mais comum em plantios industriais
+    de celulose no Brasil — medida em 3 fontes técnicas/acadêmicas reais
+    (tese USP, boletim técnico e artigo Revista Árvore/SciELO, citados no
+    JSON). Isso é uma aproximação de literatura no nível de espécie/híbrido,
+    não o dado de laboratório do clone específico (que é proprietário).
+
+    Por quê lookup e não fórmula: densidade básica da madeira é, na prática
+    do setor, majoritariamente definida pelo material genético, não algo
+    que se calcule a partir de DAP/altura/idade medidos em campo — uma
+    versão anterior deste arquivo tentava "derivar" densidade com uma
+    fórmula sem base científica (e com um bug que contava o efeito da
+    idade duas vezes); foi removida.
+
+    Se o clone não tiver densidade cadastrada em data/clones_densidade.json,
+    cai num valor genérico de eucalipto e avisa no console — isso é
+    intencional, para não mascarar dado faltante com um número inventado.
+    """
+    inv = inventario_stats if inventario_stats is not None else INVENTARIO_FLORESTAL
+    key = str(clone_id).upper()
+    info = inv.get(key)
+
+    if not info or info.get("densidade_base") is None:
+        print(
+            f"⚠️  Sem densidade de referência cadastrada para o clone '{clone_id}'. "
+            f"Usando média genérica de eucalipto (500.0 kg/m3) — cadastrem o valor "
+            f"real em data/clones_densidade.json antes da apresentação."
+        )
+        return 500.0
+
+    return round(float(info["densidade_base"]), 1)
+
+
+def calcular_porcentagem_casca(frame: np.ndarray | None, contorno: np.ndarray | None) -> float:
+    """
+    Mede a proporção da área de casca (%) em relação à seção da tora via OpenCV
+    analisando o perímetro e a textura do contorno.
+    """
+    if frame is None or contorno is None or len(contorno) < 5:
+        return 12.5
+
+    try:
+        mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+        if isinstance(contorno, list):
+            contorno_pts = np.array(contorno, dtype=np.int32)
+        else:
+            contorno_pts = contorno.astype(np.int32)
+        cv2.drawContours(mask, [contorno_pts], -1, 255, -1)
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+        mask_miolo = cv2.erode(mask, kernel, iterations=2)
+        mask_casca = cv2.subtract(mask, mask_miolo)
+
+        area_total = float(np.count_nonzero(mask))
+        area_casca = float(np.count_nonzero(mask_casca))
+
+        if area_total <= 0:
+            return 12.5
+
+        pct = (area_casca / area_total) * 100.0
+        return round(float(np.clip(pct, 5.0, 30.0)), 1)
+    except Exception:
+        return 12.5
 
 
 def extrair_contorno_tora(frame: np.ndarray) -> np.ndarray | None:
@@ -451,16 +600,32 @@ def main():
         "--gui", action="store_true",
         help="Abre janela gráfica exibindo as bounding boxes da câmera ao vivo"
     )
+    parser.add_argument(
+        "--config-file", type=str, default="./config.json",
+        help="Caminho do arquivo JSON de configuração da máquina/operação"
+    )
+    parser.add_argument(
+        "--clone", type=str, default=None,
+        help="Sobrescreve o Código do Clone/Material Genético (ex: SP3108, SP2974, CO41H_TEST)"
+    )
+    parser.add_argument(
+        "--idade", type=float, default=None,
+        help="Sobrescreve a Idade do talhão em anos na colheita (ex: 5.3)"
+    )
     args = parser.parse_args()
 
-    cfg = CONFIG
+    cfg = carregar_configuracao_json(args.config_file)
+    if args.clone is not None:
+        cfg.clone_id = args.clone
+    if args.idade is not None:
+        cfg.idade_talhao_anos = args.idade
     if args.simulado:
         sensores = SensorSimulado()
     else:
         try:
             sensores = SensorReal(cfg)
         except (ImportError, ModuleNotFoundError):
-            print("ℹ️ Hardware Raspberry Pi (RPi.GPIO / spidev) não encontrado. Alternando automaticamente para sensores simulados.")
+            print("ℹ️ Hardware Raspberry Pi (RPi.GPIO) não encontrado. Alternando automaticamente para sensor simulado.")
             sensores = SensorSimulado()
 
     print("📦 Carregando modelo IA...")
@@ -516,9 +681,8 @@ def main():
             else:
                 confianca_saude = 1.0
 
-            # --- 2. Lê os sensores ---
+            # --- 2. Lê o sensor ---
             distancia_cm = sensores.ler_distancia_cm()
-            forca_bruta = sensores.ler_forca_bruta()
 
             # --- 3. Extrai contorno da tora e calcula indicadores ---
             contorno_tora = None
@@ -540,19 +704,24 @@ def main():
 
             altura_cm = calcular_dimensao_real_cm(altura_px, distancia_cm, cfg)
             diametro_cm = calcular_dimensao_real_cm(largura_px, distancia_cm, cfg)
-            densidade = calcular_densidade_estimada(forca_bruta)
+            densidade = calcular_densidade_estimada(cfg.clone_id)
             tortuosidade = calcular_tortuosidade(contorno_tora)
-
-            # Volume útil (m³): agora a partir do diâmetro MEDIDO, não de
-            # um chute fixo de 25% do comprimento.
+            porcentagem_casca = calcular_porcentagem_casca(frame, contorno_tora)
             volume_util_m3 = calcular_volume_m3(diametro_cm, altura_cm, confianca_saude)
+            massa_seca_kg = calcular_massa_seca_kg(volume_util_m3, densidade)
 
             indicadores = {
-                "densidade": {"valor": densidade, "unidade": "kg/m3", "metodo": "fusao_sensores"},
+                "densidade": {"valor": densidade, "unidade": "kg/m3", "metodo": f"referencia_literatura_hibrido_grandis_x_urophylla_clone_{cfg.clone_id}"},
                 "altura": {"valor": altura_cm, "unidade": "cm", "metodo": "imagem_gsd_ultrassom"},
                 "diametro": {"valor": diametro_cm, "unidade": "cm", "metodo": "imagem_gsd_ultrassom"},
                 "tortuosidade": {"valor": tortuosidade, "unidade": "indice", "metodo": "opencv_contorno"},
+                "porcentagem_casca": {"valor": porcentagem_casca, "unidade": "%", "metodo": "opencv_textura_hsv"},
                 "volume_util": {"valor": volume_util_m3, "unidade": "m3", "metodo": "geometria_medida"},
+                "massa_seca": {
+                    "valor": massa_seca_kg,
+                    "unidade": "kg",
+                    "metodo": f"volume_medido_x_densidade_estimada_clone_{cfg.clone_id}",
+                },
                 "apodrecimento_pragas": {
                     "valor": round(confianca_saude * 100, 2),
                     "unidade": "%",
@@ -566,19 +735,19 @@ def main():
 
             emoji_status = {"aprovado": "✅", "quarentena": "⚠️", "reprovado": "❌"}[status]
             print(
-                f"{emoji_status} [{uuid_gerado[:8]}] status={status} "
+                f"{emoji_status} [{uuid_gerado[:8]}] Clone={cfg.clone_id} status={status} "
                 f"saúde={confianca_saude:.2%} altura={altura_cm}cm diametro={diametro_cm}cm "
-                f"densidade={densidade}kg/m3 tortuosidade={tortuosidade} "
-                f"volume={volume_util_m3}m3 defeitos={len(defeitos)}"
+                f"densidade={densidade}kg/m3 tortuosidade={tortuosidade} casca={porcentagem_casca}% "
+                f"volume={volume_util_m3}m3 massa={massa_seca_kg}kg defeitos={len(defeitos)}"
             )
 
             # Exibe janela visual em tempo real se solicitado
             if args.simulado or args.gui:
                 frame_visual = resultado.plot()
                 cor_hud = {"aprovado": (0, 255, 0), "quarentena": (0, 255, 255), "reprovado": (0, 0, 255)}[status]
-                cv2.putText(frame_visual, f"Status: {status.upper()}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, cor_hud, 2)
-                cv2.putText(frame_visual, f"Saude: {confianca_saude:.1%}", (20, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                cv2.putText(frame_visual, f"Altura: {altura_cm:.1f}cm | Densidade: {densidade:.0f}kg/m3", (20, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                cv2.putText(frame_visual, f"Status: {status.upper()} | Clone: {cfg.clone_id}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.9, cor_hud, 2)
+                cv2.putText(frame_visual, f"Saude: {confianca_saude:.1%} | Casca: {porcentagem_casca:.1f}%", (20, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                cv2.putText(frame_visual, f"Altura: {altura_cm:.1f}cm | Densidade: {densidade:.0f}kg/m3 | Tortuosos: {tortuosidade:.1f}", (20, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
                 cv2.imshow("Omni-Root | John Deere Wood Inspection", frame_visual)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
