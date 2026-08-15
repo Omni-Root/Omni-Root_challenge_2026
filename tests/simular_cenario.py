@@ -48,9 +48,9 @@ from main import (
 def carregar_modelo():
     """Tenta carregar o melhor modelo treinado ou o YOLOv8 padrão."""
     caminhos_modelo = [
-        Path("./models/wood_best.pt"),
-        Path("./models/wood_ncnn_model"),
-        Path("./yolov8n.pt"),
+        Path("../models/wood_best.pt"),
+        Path("../models/wood_ncnn_model"),
+        Path("../yolov8n.pt"),
     ]
     for caminho in caminhos_modelo:
         if caminho.exists():

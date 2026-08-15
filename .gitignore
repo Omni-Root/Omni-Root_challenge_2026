@@ -35,3 +35,6 @@ kaggle.json
 .env
 
 prompt.txt
+train/
+tests/resultados_teste/
+tests/runs/
