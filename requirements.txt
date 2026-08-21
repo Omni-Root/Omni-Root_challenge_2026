@@ -1,11 +1,19 @@
-# Dependências multiplataforma (Windows, Windows Embedded, Linux, macOS)
+# Dependências do projeto inteiro (main.py + sync_daemon.py) num único
+# arquivo, por simplicidade. Instala tudo em qualquer máquina que rodar
+# `pip install -r requirements.txt`, mesmo que ela só use uma parte do
+# projeto -- ex: a máquina de campo (main.py) não precisa de psycopg2, e
+# a máquina central (sync_daemon.py) não precisa do ultralytics/opencv,
+# mas não tem problema instalar mesmo assim, só um pouco de peso a mais.
+
+# --- main.py (câmera + IA, roda na máquina de campo) ---
 ultralytics
 opencv-python-headless
 numpy
 
-# Só instala/é necessária rodando de verdade num Raspberry Pi com GPIO
-# físico (sensor ultrassônico). Em qualquer outro sistema (Windows,
-# notebook, etc.) o "sys_platform == linux" abaixo já impede o pip de
-# tentar instalar — e o main.py já cai sozinho para sensor simulado se
-# ela não estiver presente.
-RPi.GPIO; sys_platform == "linux"
+# --- sync_daemon.py (roda perto do PostgreSQL central) ---
+psycopg2-binary
+python-dotenv
+
+# Sem dependência de sensor -- distância câmera-tora é uma constante
+# calibrada em Config (main.py), não medida por hardware. Único hardware
+# necessário em qualquer ponto do projeto é a câmera.

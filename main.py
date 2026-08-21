@@ -5,8 +5,9 @@ Projeto: Qualidade da Madeira — Challenge FIAP x John Deere/Suzano
 O que este script faz, em ordem:
   1. Captura um frame da câmera acoplada à máquina
   2. Roda o modelo YOLO (NCNN) para detectar defeitos (praga, apodrecimento)
-  3. Lê o sensor ultrassônico conectado diretamente ao Raspberry (distância
-     câmera-tora, usada na conversão pixel -> cm)
+  3. Converte pixel -> cm real usando uma distância câmera-tora FIXA e
+     calibrada (não sensor físico — a câmera é montada numa posição fixa
+     em relação à tora, então a distância não muda entre leituras)
   4. Calcula os 4 indicadores de qualidade (densidade, altura, tortuosidade,
      apodrecimento_pragas) — densidade vem de um lookup por clone/material
      genético (data/clones_densidade.json), NÃO de sensor físico
@@ -16,27 +17,21 @@ O que este script faz, em ordem:
      sync.go sincronizar com o PostgreSQL quando houver rede
 
 Modo de uso:
-  Produção no Raspberry (com sensores/GPIO reais):
-    python3 main.py
+  python3 main.py --simulado --gui
 
-  Em QUALQUER outro sistema (Windows, Windows Embedded, notebook, etc.):
-    Se RPi.GPIO não estiver instalado (não vai estar fora de um
-    Raspberry), o script detecta sozinho e cai para sensores simulados —
-    não precisa passar nenhuma flag pra isso funcionar. Mas para garantir
-    que a janela com as bounding boxes apareça na demonstração, rode:
-    python3 main.py --simulado --gui
+  (a distinção entre "Raspberry real" e "simulado" não existe mais para o
+  sensor — o único hardware é a câmera. --simulado agora só controla se a
+  janela com as bounding boxes é exibida na demonstração.)
 
 Dependências (requirements.txt):
   ultralytics
   opencv-python-headless
   numpy
-  RPi.GPIO      (só instala/roda em Linux — em qualquer outro SO, ignorado)
 """
 
 import argparse
 import hashlib
 import json
-import random
 import sqlite3
 import sys
 import time
@@ -78,9 +73,14 @@ class Config:
     limiar_aprovacao: float = 0.85       # 85% de confiança mínima
     limiar_quarentena: float = 0.60      # abaixo disso já é reprovado direto
 
-    # --- Sensor ultrassônico (HC-SR04) — pinos GPIO (BCM) ---
-    pino_trigger: int = 23
-    pino_echo: int = 24
+    # --- Distância câmera-tora, FIXA e calibrada (sem sensor) ---
+    # A câmera é montada numa posição fixa em relação à tora (no braço do
+    # harvester ou na maquete), então a distância não muda entre leituras.
+    # CALIBREM ESSE VALOR com a montagem real antes da apresentação: meçam
+    # a distância física câmera-tora uma vez, com fita métrica, e coloquem
+    # o número aqui. É o único "hardware" que isso substitui — nenhum
+    # sensor físico é necessário.
+    distancia_camera_tora_cm: float = 45.0
 
     # --- Câmera: parâmetros para cálculo de dimensão real (GSD) ---
     # Precisam ser calibrados com a câmera real usada na apresentação!
@@ -178,57 +178,6 @@ def carregar_configuracao_json(caminho_json: str = "./config.json") -> Config:
 
 INVENTARIO_FLORESTAL = carregar_inventario_florestal()
 CONFIG = carregar_configuracao_json()
-
-
-# ============================================================
-# CAMADA DE SENSORES
-# ============================================================
-# Duas implementações: real (GPIO/SPI no Raspberry) e simulada
-# (para testar a lógica no notebook, sem hardware).
-# ============================================================
-
-class SensorReal:
-    """Lê os sensores conectados diretamente ao Raspberry Pi."""
-
-    def __init__(self, cfg: Config):
-        import RPi.GPIO as GPIO
-
-        self.GPIO = GPIO
-        self.cfg = cfg
-
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setup(cfg.pino_trigger, GPIO.OUT)
-        GPIO.setup(cfg.pino_echo, GPIO.IN)
-        GPIO.output(cfg.pino_trigger, False)
-
-    def ler_distancia_cm(self) -> float:
-        """Mede a distância câmera-tora com o sensor ultrassônico HC-SR04."""
-        GPIO = self.GPIO
-        cfg = self.cfg
-
-        GPIO.output(cfg.pino_trigger, True)
-        time.sleep(0.00001)
-        GPIO.output(cfg.pino_trigger, False)
-
-        timeout = time.time() + 0.04  # 40ms de timeout de segurança
-        inicio = time.time()
-        while GPIO.input(cfg.pino_echo) == 0 and time.time() < timeout:
-            inicio = time.time()
-
-        fim = time.time()
-        while GPIO.input(cfg.pino_echo) == 1 and time.time() < timeout:
-            fim = time.time()
-
-        duracao = fim - inicio
-        distancia_cm = (duracao * 34300) / 2  # velocidade do som / 2 (ida e volta)
-        return round(distancia_cm, 2)
-
-
-class SensorSimulado:
-    """Gera leituras plausíveis para testar a lógica sem hardware."""
-
-    def ler_distancia_cm(self) -> float:
-        return round(random.uniform(30.0, 80.0), 2)
 
 
 # ============================================================
@@ -620,7 +569,7 @@ def main():
     parser = argparse.ArgumentParser(description="IA de Qualidade da Madeira — Raspberry Pi")
     parser.add_argument(
         "--simulado", action="store_true",
-        help="Roda com webcam comum + sensores simulados (teste sem hardware)"
+        help="Abre a janela com bounding boxes (mesmo efeito de --gui, mantido por compatibilidade)"
     )
     parser.add_argument(
         "--gui", action="store_true",
@@ -645,14 +594,6 @@ def main():
         cfg.clone_id = args.clone
     if args.idade is not None:
         cfg.idade_talhao_anos = args.idade
-    if args.simulado:
-        sensores = SensorSimulado()
-    else:
-        try:
-            sensores = SensorReal(cfg)
-        except (ImportError, ModuleNotFoundError):
-            print("ℹ️ Hardware Raspberry Pi (RPi.GPIO) não encontrado. Alternando automaticamente para sensor simulado.")
-            sensores = SensorSimulado()
 
     print("📦 Carregando modelo IA...")
     caminho_modelo = None
@@ -707,8 +648,8 @@ def main():
             else:
                 confianca_saude = 1.0
 
-            # --- 2. Lê o sensor ---
-            distancia_cm = sensores.ler_distancia_cm()
+            # --- 2. Distância câmera-tora: fixa e calibrada, sem sensor ---
+            distancia_cm = cfg.distancia_camera_tora_cm
 
             # --- 3. Extrai contorno da tora e calcula indicadores ---
             contorno_tora = None
@@ -737,7 +678,7 @@ def main():
             massa_seca_kg = calcular_massa_seca_kg(volume_util_m3, densidade)
 
             indicadores = {
-                "densidade": {"valor": densidade, "unidade": "kg/m3", "metodo": f"referencia_literatura_hibrido_grandis_x_urophylla_clone_{cfg.clone_id}"},
+                "densidade": {"valor": densidade, "unidade": "kg/m3", "metodo": f"lit_hibrido_grandis_urophylla_{cfg.clone_id}"},
                 "altura": {"valor": altura_cm, "unidade": "cm", "metodo": "imagem_gsd_ultrassom"},
                 "diametro": {"valor": diametro_cm, "unidade": "cm", "metodo": "imagem_gsd_ultrassom"},
                 "tortuosidade": {"valor": tortuosidade, "unidade": "indice", "metodo": "opencv_contorno"},
@@ -746,7 +687,7 @@ def main():
                 "massa_seca": {
                     "valor": massa_seca_kg,
                     "unidade": "kg",
-                    "metodo": f"volume_medido_x_densidade_estimada_clone_{cfg.clone_id}",
+                    "metodo": f"volume_x_densidade_est_{cfg.clone_id}",
                 },
                 "apodrecimento_pragas": {
                     "valor": round(confianca_saude * 100, 2),
