@@ -38,10 +38,11 @@ CONFIGURAÇÃO:
     Se não existir .env, cai pros valores padrão abaixo (mesmos do Go).
 """
 
-import hashlib
+import json
 import os
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import psycopg2
@@ -62,6 +63,7 @@ class Config:
     pg_password: str
     pg_dbname: str
     intervalo_seg: int
+    cache_densidade_path: str  # onde gravar a tabela de densidade baixada do Postgres
 
     @property
     def pg_dsn(self) -> str:
@@ -86,6 +88,9 @@ def carregar_config() -> Config:
         pg_password=pg_password,
         pg_dbname=os.getenv("PG_DBNAME", "desafio_madeira"),
         intervalo_seg=int(os.getenv("SYNC_INTERVALO_SEG", "30")),
+        cache_densidade_path=os.getenv(
+            "CACHE_DENSIDADE_PATH", str(Path(".") / "data" / "clones_densidade.json")
+        ),
     )
 
 
@@ -103,6 +108,17 @@ def sincronizar_bancos(cfg: Config) -> None:
 
     try:
         pg_conn.autocommit = False
+
+        # 1.5. Antes de subir dados, BAIXA a tabela de referência de
+        # densidade por clone (sincronização no sentido inverso).
+        # Ver migration_clones_densidade.sql para o porquê.
+        try:
+            baixar_tabela_densidade(pg_conn, cfg.cache_densidade_path)
+        except Exception as e:
+            # Falha aqui NÃO deve impedir o upload das toras -- o
+            # main.py continua funcionando com o cache anterior.
+            print(f"⚠️  Não consegui atualizar a tabela de densidade: {e}")
+            print("   (o main.py segue usando o cache local anterior)")
 
         # 2. Conecta no SQLite local
         import sqlite3
@@ -132,6 +148,91 @@ def sincronizar_bancos(cfg: Config) -> None:
             sqlite_conn.close()
     finally:
         pg_conn.close()
+
+
+# ============================================================
+# SINCRONIZAÇÃO INVERSA: Postgres -> cache local de densidade
+# ============================================================
+
+def baixar_tabela_densidade(pg_conn, caminho_cache: str) -> None:
+    """
+    Baixa a tabela clones_densidade do Postgres central e regrava o
+    cache local (data/clones_densidade.json), que é o arquivo que o
+    main.py já lê hoje.
+
+    Por que via arquivo JSON e não direto no SQLite: assim o main.py
+    NÃO precisa mudar nada -- ele continua lendo o mesmo arquivo de
+    sempre, só que agora esse arquivo é atualizado automaticamente
+    a cada sincronização em vez de ser editado à mão.
+
+    Se a máquina nunca sincronizou, o JSON que já está no repositório
+    serve de valor inicial. Se está offline, continua usando o último
+    baixado. É isso que mantém o offline-first funcionando.
+    """
+    cursor = pg_conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT clone_id, especie, densidade_base, densidade_min,
+                   densidade_max, tipo_dado, fonte, atualizado_em
+            FROM clones_densidade
+            ORDER BY clone_id
+            """
+        )
+        linhas = cursor.fetchall()
+    finally:
+        cursor.close()
+
+    if not linhas:
+        print("ℹ️  Tabela clones_densidade está vazia no Postgres — cache local mantido como está.")
+        return
+
+    dados = {
+        "_leiame": (
+            "CACHE SINCRONIZADO AUTOMATICAMENTE do PostgreSQL central "
+            "(tabela clones_densidade) pelo sync_daemon.py. NÃO edite este "
+            "arquivo à mão -- as alterações serão sobrescritas na próxima "
+            "sincronização. Para mudar um valor, altere na tabela do "
+            "Postgres, que é a fonte de verdade. O campo 'tipo_dado' de "
+            "cada clone diz de onde veio o número: 'laboratorio' (laudo "
+            "real da empresa), 'literatura' (valor publicado para este "
+            "clone específico) ou 'referencia_generica' (média do híbrido, "
+            "ainda aguardando dado do clone)."
+        ),
+        "_sincronizado_em": datetime.now().isoformat(timespec="seconds"),
+        "_total_clones": len(linhas),
+    }
+
+    contagem_por_tipo: dict = {}
+    for clone_id, especie, dens, dmin, dmax, tipo, fonte, atualizado in linhas:
+        contagem_por_tipo[tipo] = contagem_por_tipo.get(tipo, 0) + 1
+        dados[clone_id] = {
+            # float() porque psycopg2 devolve NUMERIC como Decimal, que
+            # não é serializável em JSON direto.
+            "densidade_base": float(dens) if dens is not None else None,
+            "densidade_min": float(dmin) if dmin is not None else None,
+            "densidade_max": float(dmax) if dmax is not None else None,
+            "unidade": "kg/m3",
+            "especie": especie,
+            "tipo_dado": tipo,
+            "fonte": fonte,
+            "atualizado_em": atualizado.isoformat(timespec="seconds") if atualizado else None,
+        }
+
+    destino = Path(caminho_cache)
+    destino.parent.mkdir(parents=True, exist_ok=True)
+
+    # Escrita atômica: grava num temporário e só então substitui o
+    # arquivo real. Evita deixar um JSON corrompido/pela metade se o
+    # processo morrer no meio da escrita -- o main.py pode estar lendo
+    # esse arquivo ao mesmo tempo.
+    temporario = destino.with_suffix(".json.tmp")
+    with open(temporario, "w", encoding="utf-8") as f:
+        json.dump(dados, f, ensure_ascii=False, indent=2)
+    temporario.replace(destino)
+
+    resumo = ", ".join(f"{qtd} {tipo}" for tipo, qtd in sorted(contagem_por_tipo.items()))
+    print(f"📥 Tabela de densidade atualizada: {len(linhas)} clones ({resumo}).")
 
 
 def buscar_toras_pendentes(sqlite_conn) -> list:

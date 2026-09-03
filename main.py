@@ -127,8 +127,13 @@ def carregar_inventario_florestal(
         for clone_key, info in dados_densidade.items():
             if not isinstance(info, dict):
                 continue
+            # densidade_base pode vir None: o clone está cadastrado no
+            # Postgres mas ainda aguarda laudo de laboratório. Nesse caso
+            # deixamos None de propósito -- calcular_densidade_estimada
+            # avisa no console em vez de mascarar com um número inventado.
+            dens_bruta = info.get("densidade_base")
             estatisticas_clones[str(clone_key).upper()] = {
-                "densidade_base": float(info.get("densidade_base", 500.0)),
+                "densidade_base": float(dens_bruta) if dens_bruta is not None else None,
                 "taxa_maturacao": info.get("taxa_maturacao"),  # guardado, NÃO aplicado (ver calcular_densidade_estimada)
                 "especie": info.get("especie", info.get("descricao", "Eucalyptus sp.")),
                 "dap_medio_inventario": None,
@@ -276,9 +281,11 @@ def calcular_densidade_estimada(clone_id: str, inventario_stats: dict | None = N
 
     if not info or info.get("densidade_base") is None:
         print(
-            f"⚠️  Sem densidade de referência cadastrada para o clone '{clone_id}'. "
-            f"Usando média genérica de eucalipto (500.0 kg/m3) — cadastrem o valor "
-            f"real em data/clones_densidade.json antes da apresentação."
+            f"⚠️  Sem densidade cadastrada para o clone '{clone_id}'. Usando média "
+            f"genérica de eucalipto (500.0 kg/m3). Para corrigir, cadastre o valor "
+            f"na tabela 'clones_densidade' do PostgreSQL central (fonte de verdade) "
+            f"— o sync_daemon.py traz a atualização automaticamente na próxima "
+            f"sincronização."
         )
         return 500.0
 

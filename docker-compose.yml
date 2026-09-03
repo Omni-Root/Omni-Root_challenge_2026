@@ -1,0 +1,45 @@
+# docker-compose.yml — Postgres local pra testar o sync_daemon.py
+#
+# Lê as MESMAS variáveis do .env que o sync_daemon.py já usa (o docker
+# compose carrega o .env automaticamente se estiver na mesma pasta),
+# então não precisa duplicar senha em lugar nenhum.
+#
+# USO:
+#   1. cp .env.example .env   (se ainda não tiver)
+#   2. preencha PG_PASSWORD no .env com qualquer senha local de teste
+#   3. docker compose up -d
+#   4. python sync_daemon.py
+#
+# Na PRIMEIRA subida (volume vazio), o Postgres roda sozinho, em ordem,
+# os três arquivos montados em docker-entrypoint-initdb.d:
+#   01 -> schema_postgres.sql            (tabelas)
+#   02 -> seed_teste.sql                 (máquina + talhão de teste)
+#   03 -> migration_clones_densidade.sql (tabela de densidade + clones da JD)
+#
+# ATENÇÃO: esses scripts SÓ rodam quando o volume é criado do zero. Se
+# você já tinha subido antes e quer recomeçar limpo:
+#   docker compose down -v && docker compose up -d
+# (o -v apaga o volume; é banco de teste, sem problema)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: omniroot_postgres_teste
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${PG_USER:-postgres}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-omniroot_dev_local}
+      POSTGRES_DB: ${PG_DBNAME:-desafio_madeira}
+    ports:
+      - "${PG_PORT:-5432}:5432"
+    volumes:
+      - omniroot_pg_data:/var/lib/postgresql/data
+      - ./Banco de dados/setup_completo.sql:/docker-entrypoint-initdb.d/01_setup.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-postgres} -d ${PG_DBNAME:-desafio_madeira}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  omniroot_pg_data:
