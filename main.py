@@ -63,7 +63,7 @@ class Config:
     modelo_ncnn_path: str = "./models/wood_ncnn_model"
     conf_threshold: float = 0.40
     iou_threshold: float = 0.55
-    imgsz: int = 640
+    imgsz: int = 1024
 
     # --- Câmera ---
     camera_index: int = 0
@@ -342,6 +342,41 @@ def calcular_porcentagem_casca(frame: np.ndarray | None, contorno: np.ndarray | 
         return 0.0
 
 
+# ------------------------------------------------------------
+# PRÉ-PROCESSAMENTO PARA O MODELO
+# ------------------------------------------------------------
+# O modelo foi TREINADO com as imagens convertidas para escala de
+# cinza e equalizadas com CLAHE (ver a célula de preparação do
+# dataset no notebook de treino). Se a inferência mandar o frame
+# BGR cru da câmera, o modelo recebe uma distribuição de pixels
+# diferente da que aprendeu -- isso degrada a precisão sem gerar
+# erro nenhum, o tipo de problema que passa despercebido.
+#
+# Esta função replica EXATAMENTE o pré-processamento do treino:
+#     gray = cvtColor(img, BGR2GRAY)
+#     gray = CLAHE(clipLimit=2.0, tileGridSize=(8,8)).apply(gray)
+#     img  = cvtColor(gray, GRAY2BGR)
+#
+# ⚠️ Se mudarem clipLimit/tileGridSize no notebook de treino,
+#    mudem AQUI TAMBÉM -- os dois precisam andar juntos sempre.
+# ------------------------------------------------------------
+_CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+
+
+def preprocessar_para_modelo(frame: np.ndarray) -> np.ndarray:
+    """Aplica grayscale + CLAHE, igual ao pré-processamento do treino."""
+    if frame is None:
+        return frame
+    try:
+        cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        cinza = _CLAHE.apply(cinza)
+        return cv2.cvtColor(cinza, cv2.COLOR_GRAY2BGR)
+    except Exception:
+        # Em caso de falha, devolve o frame original: melhor inferir
+        # com qualidade degradada do que derrubar o loop inteiro.
+        return frame
+
+
 def extrair_contorno_tora(frame: np.ndarray) -> np.ndarray | None:
     """
     Segmenta a região da tora no frame usando técnicas de visão computacional
@@ -437,45 +472,136 @@ def extrair_defeitos_yolo(resultado, cfg: Config, frame_shape: tuple | None = No
 # REGRA DE NEGÓCIO — CLASSIFICAÇÃO FINAL DA TORA
 # ============================================================
 
+# ------------------------------------------------------------
+# SEVERIDADE POR TIPO DE DEFEITO
+# ------------------------------------------------------------
+# Nem todo defeito pesa igual para a indústria de celulose. Esta
+# graduação é o que diferencia a triagem de um simples "detectou
+# algo = reprovado".
+#
+# IMPORTANTE: os nomes aqui são EXATAMENTE as classes do modelo
+# treinado (data.yaml, nc=8). A versão anterior desta função
+# procurava por "apodrecimento"/"praga"/"rot", que NÃO existem no
+# modelo — ou seja, aquela regra nunca disparava.
+#
+# Justificativa de cada nível:
+#   GRAVE
+#     Dead_Knot       nó morto: não está integrado à fibra ao redor,
+#                     pode soltar e virar buraco no processamento
+#     Knot_missing    nó já ausente: o buraco existe
+#     knot_with_crack nó + rachadura: combina dois problemas
+#     resin           bolsa de resina: resina é extrativo, e o próprio
+#                     enunciado do desafio liga teor de extrativos ao
+#                     consumo de químicos para separar celulose da
+#                     lignina
+#   MODERADO
+#     Crack           rachadura: gravidade varia com extensão/profundidade
+#     Marrow          medula: tecido mole, fibra de baixa qualidade,
+#                     mas área pequena
+#     Quartzity       inclusão mineral: danifica lâmina, não a fibra
+#   LEVE
+#     Live_Knot       nó vivo: integrado à madeira ao redor; é o defeito
+#                     mais comum e o de menor impacto para celulose
+#
+# Estes pesos são uma DECISÃO DE PROJETO baseada em características
+# conhecidas da madeira, não uma norma técnica publicada. Se a
+# Suzano/JD fornecer o critério de triagem oficial deles, é só
+# ajustar os conjuntos abaixo — nada mais no código muda.
+# ------------------------------------------------------------
+DEFEITOS_GRAVES = ("Dead_Knot", "Knot_missing", "knot_with_crack", "resin")
+DEFEITOS_MODERADOS = ("Crack", "Marrow", "Quartzity")
+DEFEITOS_LEVES = ("Live_Knot",)
+
+PESO_SEVERIDADE = {
+    **{d: 1.0 for d in DEFEITOS_GRAVES},
+    **{d: 0.5 for d in DEFEITOS_MODERADOS},
+    **{d: 0.2 for d in DEFEITOS_LEVES},
+}
+PESO_PADRAO = 0.5  # classe desconhecida: trata como moderada, não ignora
+
+
+def severidade_do_defeito(tipo_defeito: str) -> float:
+    """Peso de 0.2 (leve) a 1.0 (grave) para um tipo de defeito."""
+    return PESO_SEVERIDADE.get(tipo_defeito, PESO_PADRAO)
+
+
+def calcular_confianca_saude(defeitos: list) -> float:
+    """
+    Score de saúde da tora (1.0 = limpa), ponderado por severidade.
+
+    Antes, qualquer defeito descontava igual: um nó vivo detectado com
+    90% de confiança derrubava a saúde tanto quanto um nó morto. Agora
+    o desconto é proporcional à gravidade do defeito para o processo
+    de celulose.
+    """
+    if not defeitos:
+        return 1.0
+
+    # O defeito mais crítico define o desconto principal...
+    impacto_principal = max(
+        d["confianca"] * severidade_do_defeito(d["tipo_defeito"]) for d in defeitos
+    )
+    # ...e a quantidade de defeitos adiciona um desconto menor,
+    # limitado, para que uma tora cheia de defeitos leves ainda seja
+    # penalizada — só que menos que uma com um defeito grave.
+    impacto_acumulado = min(
+        0.25,
+        sum(d["confianca"] * severidade_do_defeito(d["tipo_defeito"]) for d in defeitos) * 0.05,
+    )
+
+    saude = 1.0 - (impacto_principal * 0.5) - impacto_acumulado
+    return round(max(0.0, min(1.0, saude)), 4)
+
+
 def classificar_qualidade(confianca_saude: float, defeitos: list, cfg: Config) -> str:
     """
-    Aplica a regra de negócio florestal (triagem Suzano / John Deere):
+    Triagem da tora, ponderada pela gravidade do defeito para a
+    indústria de celulose:
 
-      1. Podridão ou praga com confiança >= 70%           -> reprovado (direto)
-      2. Defeito extenso (>= 5% da área do frame)         -> reprovado
-      3. Saúde abaixo de 60% (limiar_quarentena)           -> reprovado
-      4. Sem defeitos E saúde >= 85% (limiar_aprovacao)    -> aprovado
-      5. Qualquer outro caso (zona cinza)                  -> quarentena (revisão manual)
+      1. Defeito GRAVE com confiança >= 70%              -> reprovado
+      2. Defeito extenso (>= 5% da área) com conf >= 65% -> reprovado
+      3. Saúde abaixo de limiar_quarentena (60%)         -> reprovado
+      4. Sem defeito E saúde >= limiar_aprovacao (85%)   -> aprovado
+      5. Só defeitos LEVES e saúde alta                  -> aprovado
+      6. Qualquer outro caso                             -> quarentena
 
-    A quarentena cobre toras com saúde entre 60% e 85%, ou toras
-    saudáveis (>= 85%) que tenham defeitos leves detectados — são
-    casos que o operador precisa olhar antes de decidir o destino.
+    A regra 5 é a diferença prática do modelo ponderado: uma tora com
+    apenas nós vivos (o defeito mais comum e de menor impacto) não
+    precisa ir para revisão manual — antes ia, o que geraria fila de
+    quarentena desnecessária em operação real.
     """
-    # 1. Podridão grave em modelo multiclasse
-    tem_podridao = any(
-        d["tipo_defeito"] in ("apodrecimento", "praga", "rot") and d["confianca"] >= 0.70
+    # 1. Defeito grave com confiança alta
+    tem_grave = any(
+        d["tipo_defeito"] in DEFEITOS_GRAVES and d["confianca"] >= 0.70
         for d in defeitos
     )
-    if tem_podridao:
+    if tem_grave:
         return "reprovado"
 
-    # 2. Defeito extenso (>= 5% da área do frame com confiança alta)
+    # 2. Defeito extenso (ignora leves: um nó vivo grande não reprova a tora)
     tem_defeito_extenso = any(
-        d.get("area_relativa", 0.0) >= 0.05 and d["confianca"] >= 0.65
+        d.get("area_relativa", 0.0) >= 0.05
+        and d["confianca"] >= 0.65
+        and d["tipo_defeito"] not in DEFEITOS_LEVES
         for d in defeitos
     )
     if tem_defeito_extenso:
         return "reprovado"
 
-    # 3. Saúde muito baixa — abaixo do limiar de quarentena
+    # 3. Saúde muito baixa
     if confianca_saude < cfg.limiar_quarentena:
         return "reprovado"
 
-    # 4. Tora limpa e saudável — sem defeitos detectados
+    # 4. Tora limpa
     if confianca_saude >= cfg.limiar_aprovacao and len(defeitos) == 0:
         return "aprovado"
 
-    # 5. Zona cinza: saúde entre 60%-85%, ou saúde alta mas com defeitos leves
+    # 5. Apenas defeitos leves, com saúde alta -> aprovado
+    so_leves = defeitos and all(d["tipo_defeito"] in DEFEITOS_LEVES for d in defeitos)
+    if so_leves and confianca_saude >= cfg.limiar_aprovacao:
+        return "aprovado"
+
+    # 6. Zona cinza -> revisão manual
     return "quarentena"
 
 
@@ -637,8 +763,14 @@ def main():
                 continue
 
             # --- 1. Roda o YOLO no frame atual ---
+            # O modelo recebe o frame PRÉ-PROCESSADO (grayscale + CLAHE),
+            # igual ao treino. As medições por OpenCV mais abaixo continuam
+            # usando o frame COLORIDO original -- contorno e porcentagem de
+            # casca funcionam melhor com a informação de cor preservada.
+            frame_modelo = preprocessar_para_modelo(frame)
+
             resultados = modelo.predict(
-                source=frame,
+                source=frame_modelo,
                 conf=cfg.conf_threshold,
                 iou=cfg.iou_threshold,
                 imgsz=cfg.imgsz,
@@ -648,12 +780,9 @@ def main():
             resultado = resultados[0]
             defeitos = extrair_defeitos_yolo(resultado, cfg, frame.shape)
 
-            # Confiança de saúde da tora: 1.0 se limpa, ou (1.0 - conf_max_defeito)
-            if defeitos:
-                maior_conf_defeito = max(d["confianca"] for d in defeitos)
-                confianca_saude = round(max(0.0, 1.0 - (maior_conf_defeito * 0.5)), 4)
-            else:
-                confianca_saude = 1.0
+            # Saúde da tora, ponderada pela GRAVIDADE de cada defeito
+            # (ver calcular_confianca_saude / PESO_SEVERIDADE).
+            confianca_saude = calcular_confianca_saude(defeitos)
 
             # --- 2. Distância câmera-tora: fixa e calibrada, sem sensor ---
             distancia_cm = cfg.distancia_camera_tora_cm
@@ -707,12 +836,21 @@ def main():
             status = classificar_qualidade(confianca_saude, defeitos, cfg)
             uuid_gerado = salvar_inspecao(conexao, cfg, indicadores, defeitos, status, confianca_saude)
 
+            # Defeito que mais pesou na decisão — útil pra explicar o
+            # resultado ao operador (e ao avaliador, na demonstração)
+            if defeitos:
+                pior = max(defeitos, key=lambda d: d["confianca"] * severidade_do_defeito(d["tipo_defeito"]))
+                resumo_defeito = f"pior={pior['tipo_defeito']}({pior['confianca']:.2f})"
+            else:
+                resumo_defeito = "sem defeito"
+
             emoji_status = {"aprovado": "✅", "quarentena": "⚠️", "reprovado": "❌"}[status]
             print(
                 f"{emoji_status} [{uuid_gerado[:8]}] Clone={cfg.clone_id} status={status} "
                 f"saúde={confianca_saude:.2%} altura={altura_cm}cm diametro={diametro_cm}cm "
                 f"densidade={densidade}kg/m3 tortuosidade={tortuosidade} casca={porcentagem_casca}% "
-                f"volume={volume_util_m3}m3 massa={massa_seca_kg}kg defeitos={len(defeitos)}"
+                f"volume={volume_util_m3}m3 massa={massa_seca_kg}kg "
+                f"defeitos={len(defeitos)} {resumo_defeito}"
             )
 
             # Exibe janela visual em tempo real se solicitado

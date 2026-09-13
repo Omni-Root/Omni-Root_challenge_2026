@@ -23,6 +23,7 @@ __pycache__/
 # Pesos do YOLO e Artefatos do Treinamento
 *.pt
 /models/*.pt
+/models/*.zip
 /runs/
 
 # Binários do Go
