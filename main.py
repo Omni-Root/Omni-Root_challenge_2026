@@ -34,6 +34,7 @@ import hashlib
 import json
 import sqlite3
 import sys
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -740,8 +741,6 @@ def main():
     modelo = YOLO(caminho_modelo, task="detect")
     print(f"✅ Modelo carregado com sucesso ({caminho_modelo})!")
 
-    conexao = conectar_banco(cfg)
-
     print(f"📷 Abrindo câmera (índice {cfg.camera_index})...")
     if sys.platform == "win32":
         # No Windows, o backend padrão do OpenCV às vezes demora ou falha
@@ -752,126 +751,193 @@ def main():
     if not captura.isOpened():
         raise RuntimeError("Não foi possível abrir a câmera.")
 
-    print("🚀 Iniciando loop de análise. Ctrl+C para parar.\n")
+    # Buffer de 1 frame: por padrão o OpenCV enfileira frames e o read()
+    # devolve os ANTIGOS quando o processamento não acompanha — é isso que dá
+    # a sensação de atraso. Com buffer 1, sempre pegamos o frame mais recente.
+    captura.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    # ------------------------------------------------------------------
+    # Arquitetura em tempo real (a imagem nunca congela):
+    #   - Thread PRINCIPAL: só captura e exibe o vídeo (roda a ~FPS da
+    #     câmera, sempre fluido).
+    #   - Thread de TRABALHO: roda o YOLO no frame mais recente e devolve as
+    #     caixas/HUD para a principal desenhar. A inferência pesada nunca
+    #     bloqueia o vídeo — no máximo as caixas atualizam um pouco atrás.
+    # ------------------------------------------------------------------
+    estado = {"frame": None, "boxes": [], "hud": [], "cor": (0, 255, 0)}
+    lock = threading.Lock()
+    parar = threading.Event()
+
+    def worker_analise():
+        # A conexão SQLite é criada AQUI: objetos sqlite3 só podem ser usados
+        # na mesma thread em que foram criados.
+        conexao = conectar_banco(cfg)
+        ultima_gravacao = 0.0
+        try:
+            while not parar.is_set():
+                with lock:
+                    frame = None if estado["frame"] is None else estado["frame"].copy()
+                if frame is None:
+                    time.sleep(0.01)
+                    continue
+                try:
+                    # --- 1. Roda o YOLO no frame mais recente ---
+                    # O modelo recebe o frame PRÉ-PROCESSADO (grayscale + CLAHE),
+                    # igual ao treino. As medições por OpenCV mais abaixo continuam
+                    # usando o frame COLORIDO original -- contorno e porcentagem de
+                    # casca funcionam melhor com a informação de cor preservada.
+                    frame_modelo = preprocessar_para_modelo(frame)
+
+                    resultados = modelo.predict(
+                        source=frame_modelo,
+                        conf=cfg.conf_threshold,
+                        iou=cfg.iou_threshold,
+                        imgsz=cfg.imgsz,
+                        device="cpu",
+                        verbose=False,
+                    )
+                    resultado = resultados[0]
+                    defeitos = extrair_defeitos_yolo(resultado, cfg, frame.shape)
+
+                    # Saúde da tora, ponderada pela GRAVIDADE de cada defeito
+                    # (ver calcular_confianca_saude / PESO_SEVERIDADE).
+                    confianca_saude = calcular_confianca_saude(defeitos)
+
+                    # --- 2. Distância câmera-tora: fixa e calibrada, sem sensor ---
+                    distancia_cm = cfg.distancia_camera_tora_cm
+
+                    # --- 3. Extrai contorno da tora e calcula indicadores ---
+                    contorno_tora = None
+                    if resultado.masks is not None and len(resultado.masks.xy) > 0:
+                        contorno_tora = max(resultado.masks.xy, key=len)
+                    else:
+                        contorno_tora = extrair_contorno_tora(frame)
+
+                    if contorno_tora is not None and len(contorno_tora) > 0:
+                        _, _, w_box, h_box = cv2.boundingRect(contorno_tora)
+                        largura_px = float(w_box)
+                        altura_px = float(h_box)
+                    else:
+                        largura_px = float(frame.shape[1] * 0.2)
+                        altura_px = float(frame.shape[0] * 0.7)
+
+                    altura_cm = calcular_dimensao_real_cm(altura_px, distancia_cm, cfg)
+                    diametro_cm = calcular_dimensao_real_cm(largura_px, distancia_cm, cfg)
+                    densidade = calcular_densidade_estimada(cfg.clone_id)
+                    tortuosidade = calcular_tortuosidade(contorno_tora)
+                    porcentagem_casca = calcular_porcentagem_casca(frame, contorno_tora)
+                    volume_util_m3 = calcular_volume_m3(diametro_cm, altura_cm, confianca_saude)
+                    massa_seca_kg = calcular_massa_seca_kg(volume_util_m3, densidade)
+
+                    status = classificar_qualidade(confianca_saude, defeitos, cfg)
+                    cor = {"aprovado": (0, 255, 0), "quarentena": (0, 255, 255), "reprovado": (0, 0, 255)}[status]
+
+                    # Caixas + HUD para a thread principal desenhar no vídeo ao vivo
+                    boxes = []
+                    for box in resultado.boxes:
+                        x1, y1, x2, y2 = box.xyxy[0].tolist()
+                        classe = resultado.names.get(int(box.cls[0]), "?")
+                        conf = float(box.conf[0])
+                        boxes.append((int(x1), int(y1), int(x2), int(y2), f"{classe} {conf:.2f}"))
+                    hud = [
+                        f"Status: {status.upper()} | Clone: {cfg.clone_id}",
+                        f"Saude: {confianca_saude:.1%} | Casca: {porcentagem_casca:.1f}%",
+                        f"Altura: {altura_cm:.1f}cm | Densidade: {densidade:.0f}kg/m3 | Tortuos: {tortuosidade:.1f}",
+                    ]
+                    with lock:
+                        estado["boxes"] = boxes
+                        estado["hud"] = hud
+                        estado["cor"] = cor
+
+                    # --- 4. Grava no banco no máximo uma vez por intervalo ---
+                    # (a inferência para exibição roda mais rápido que isso).
+                    agora = time.monotonic()
+                    if agora - ultima_gravacao >= cfg.intervalo_captura_seg:
+                        ultima_gravacao = agora
+                        indicadores = {
+                            "densidade": {"valor": densidade, "unidade": "kg/m3", "metodo": f"lit_hibrido_grandis_urophylla_{cfg.clone_id}"},
+                            "altura": {"valor": altura_cm, "unidade": "cm", "metodo": "imagem_gsd_ultrassom"},
+                            "diametro": {"valor": diametro_cm, "unidade": "cm", "metodo": "imagem_gsd_ultrassom"},
+                            "tortuosidade": {"valor": tortuosidade, "unidade": "indice", "metodo": "opencv_contorno"},
+                            "porcentagem_casca": {"valor": porcentagem_casca, "unidade": "%", "metodo": "opencv_textura_hsv"},
+                            "volume_util": {"valor": volume_util_m3, "unidade": "m3", "metodo": "geometria_medida"},
+                            "massa_seca": {"valor": massa_seca_kg, "unidade": "kg", "metodo": f"volume_x_densidade_est_{cfg.clone_id}"},
+                            "apodrecimento_pragas": {"valor": round(confianca_saude * 100, 2), "unidade": "%", "metodo": "yolo"},
+                        }
+                        uuid_gerado = salvar_inspecao(conexao, cfg, indicadores, defeitos, status, confianca_saude)
+
+                        # Defeito que mais pesou na decisão — útil pra explicar o
+                        # resultado ao operador (e ao avaliador, na demonstração)
+                        if defeitos:
+                            pior = max(defeitos, key=lambda d: d["confianca"] * severidade_do_defeito(d["tipo_defeito"]))
+                            resumo_defeito = f"pior={pior['tipo_defeito']}({pior['confianca']:.2f})"
+                        else:
+                            resumo_defeito = "sem defeito"
+
+                        emoji_status = {"aprovado": "✅", "quarentena": "⚠️", "reprovado": "❌"}[status]
+                        print(
+                            f"{emoji_status} [{uuid_gerado[:8]}] Clone={cfg.clone_id} status={status} "
+                            f"saúde={confianca_saude:.2%} altura={altura_cm}cm diametro={diametro_cm}cm "
+                            f"densidade={densidade}kg/m3 tortuosidade={tortuosidade} casca={porcentagem_casca}% "
+                            f"volume={volume_util_m3}m3 massa={massa_seca_kg}kg "
+                            f"defeitos={len(defeitos)} {resumo_defeito}"
+                        )
+                except Exception as e:
+                    print(f"⚠️  Erro na análise (seguindo em frente): {e}")
+                    time.sleep(0.05)
+        finally:
+            conexao.close()
+
+    thread = threading.Thread(target=worker_analise, daemon=True)
+    thread.start()
+
+    mostrar = args.simulado or args.gui
+    fonte = cv2.FONT_HERSHEY_SIMPLEX
+    print(
+        "🚀 Rodando em tempo real. "
+        + ("Tecle 'q' na janela ou " if mostrar else "")
+        + "Ctrl+C para parar.\n"
+    )
 
     try:
-        while True:
+        while not parar.is_set():
             sucesso, frame = captura.read()
             if not sucesso:
                 print("⚠️  Falha ao capturar frame. Tentando de novo...")
-                time.sleep(1)
+                time.sleep(0.1)
                 continue
 
-            # --- 1. Roda o YOLO no frame atual ---
-            # O modelo recebe o frame PRÉ-PROCESSADO (grayscale + CLAHE),
-            # igual ao treino. As medições por OpenCV mais abaixo continuam
-            # usando o frame COLORIDO original -- contorno e porcentagem de
-            # casca funcionam melhor com a informação de cor preservada.
-            frame_modelo = preprocessar_para_modelo(frame)
+            # Publica o frame mais recente para o worker e pega o último resultado.
+            with lock:
+                estado["frame"] = frame
+                boxes = list(estado["boxes"])
+                hud = list(estado["hud"])
+                cor = estado["cor"]
 
-            resultados = modelo.predict(
-                source=frame_modelo,
-                conf=cfg.conf_threshold,
-                iou=cfg.iou_threshold,
-                imgsz=cfg.imgsz,
-                device="cpu",
-                verbose=False,
-            )
-            resultado = resultados[0]
-            defeitos = extrair_defeitos_yolo(resultado, cfg, frame.shape)
-
-            # Saúde da tora, ponderada pela GRAVIDADE de cada defeito
-            # (ver calcular_confianca_saude / PESO_SEVERIDADE).
-            confianca_saude = calcular_confianca_saude(defeitos)
-
-            # --- 2. Distância câmera-tora: fixa e calibrada, sem sensor ---
-            distancia_cm = cfg.distancia_camera_tora_cm
-
-            # --- 3. Extrai contorno da tora e calcula indicadores ---
-            contorno_tora = None
-            if resultado.masks is not None and len(resultado.masks.xy) > 0:
-                contorno_tora = max(resultado.masks.xy, key=len)
-            else:
-                contorno_tora = extrair_contorno_tora(frame)
-
-            # Comprimento visível ("altura" no banco) e diâmetro ("largura")
-            # da tora em pixels — os dois eixos do MESMO bounding box, cada
-            # um convertido pra cm real pela mesma função de GSD.
-            if contorno_tora is not None and len(contorno_tora) > 0:
-                _, _, w_box, h_box = cv2.boundingRect(contorno_tora)
-                largura_px = float(w_box)
-                altura_px = float(h_box)
-            else:
-                largura_px = float(frame.shape[1] * 0.2)
-                altura_px = float(frame.shape[0] * 0.7)
-
-            altura_cm = calcular_dimensao_real_cm(altura_px, distancia_cm, cfg)
-            diametro_cm = calcular_dimensao_real_cm(largura_px, distancia_cm, cfg)
-            densidade = calcular_densidade_estimada(cfg.clone_id)
-            tortuosidade = calcular_tortuosidade(contorno_tora)
-            porcentagem_casca = calcular_porcentagem_casca(frame, contorno_tora)
-            volume_util_m3 = calcular_volume_m3(diametro_cm, altura_cm, confianca_saude)
-            massa_seca_kg = calcular_massa_seca_kg(volume_util_m3, densidade)
-
-            indicadores = {
-                "densidade": {"valor": densidade, "unidade": "kg/m3", "metodo": f"lit_hibrido_grandis_urophylla_{cfg.clone_id}"},
-                "altura": {"valor": altura_cm, "unidade": "cm", "metodo": "imagem_gsd_ultrassom"},
-                "diametro": {"valor": diametro_cm, "unidade": "cm", "metodo": "imagem_gsd_ultrassom"},
-                "tortuosidade": {"valor": tortuosidade, "unidade": "indice", "metodo": "opencv_contorno"},
-                "porcentagem_casca": {"valor": porcentagem_casca, "unidade": "%", "metodo": "opencv_textura_hsv"},
-                "volume_util": {"valor": volume_util_m3, "unidade": "m3", "metodo": "geometria_medida"},
-                "massa_seca": {
-                    "valor": massa_seca_kg,
-                    "unidade": "kg",
-                    "metodo": f"volume_x_densidade_est_{cfg.clone_id}",
-                },
-                "apodrecimento_pragas": {
-                    "valor": round(confianca_saude * 100, 2),
-                    "unidade": "%",
-                    "metodo": "yolo",
-                },
-            }
-
-            # --- 4. Classifica e salva ---
-            status = classificar_qualidade(confianca_saude, defeitos, cfg)
-            uuid_gerado = salvar_inspecao(conexao, cfg, indicadores, defeitos, status, confianca_saude)
-
-            # Defeito que mais pesou na decisão — útil pra explicar o
-            # resultado ao operador (e ao avaliador, na demonstração)
-            if defeitos:
-                pior = max(defeitos, key=lambda d: d["confianca"] * severidade_do_defeito(d["tipo_defeito"]))
-                resumo_defeito = f"pior={pior['tipo_defeito']}({pior['confianca']:.2f})"
-            else:
-                resumo_defeito = "sem defeito"
-
-            emoji_status = {"aprovado": "✅", "quarentena": "⚠️", "reprovado": "❌"}[status]
-            print(
-                f"{emoji_status} [{uuid_gerado[:8]}] Clone={cfg.clone_id} status={status} "
-                f"saúde={confianca_saude:.2%} altura={altura_cm}cm diametro={diametro_cm}cm "
-                f"densidade={densidade}kg/m3 tortuosidade={tortuosidade} casca={porcentagem_casca}% "
-                f"volume={volume_util_m3}m3 massa={massa_seca_kg}kg "
-                f"defeitos={len(defeitos)} {resumo_defeito}"
-            )
-
-            # Exibe janela visual em tempo real se solicitado
-            if args.simulado or args.gui:
-                frame_visual = resultado.plot()
-                cor_hud = {"aprovado": (0, 255, 0), "quarentena": (0, 255, 255), "reprovado": (0, 0, 255)}[status]
-                cv2.putText(frame_visual, f"Status: {status.upper()} | Clone: {cfg.clone_id}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.9, cor_hud, 2)
-                cv2.putText(frame_visual, f"Saude: {confianca_saude:.1%} | Casca: {porcentagem_casca:.1f}%", (20, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                cv2.putText(frame_visual, f"Altura: {altura_cm:.1f}cm | Densidade: {densidade:.0f}kg/m3 | Tortuosos: {tortuosidade:.1f}", (20, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
-                cv2.imshow("Omni-Root | John Deere Wood Inspection", frame_visual)
+            if mostrar:
+                vis = frame.copy()
+                for (x1, y1, x2, y2, label) in boxes:
+                    cv2.rectangle(vis, (x1, y1), (x2, y2), cor, 2)
+                    cv2.putText(vis, label, (x1, max(15, y1 - 6)), fonte, 0.5, cor, 1)
+                for i, linha in enumerate(hud):
+                    escala = 0.9 if i == 0 else (0.7 if i == 1 else 0.55)
+                    cor_txt = cor if i == 0 else (255, 255, 255)
+                    espessura = 2 if i <= 1 else 1
+                    cv2.putText(vis, linha, (20, 40 + i * 33), fonte, escala, cor_txt, espessura)
+                cv2.imshow("Omni-Root | John Deere Wood Inspection", vis)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
-
-            time.sleep(cfg.intervalo_captura_seg)
+            else:
+                # Sem janela: só mantém o worker alimentado sem ocupar 100% da CPU.
+                time.sleep(0.03)
 
     except KeyboardInterrupt:
         print("\n🛑 Encerrando por solicitação do usuário...")
     finally:
+        parar.set()
+        thread.join(timeout=2.0)
         captura.release()
         cv2.destroyAllWindows()
-        conexao.close()
         print("✅ Recursos liberados. Até a próxima inspeção!")
 
 
