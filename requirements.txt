@@ -7,13 +7,29 @@
 
 # --- main.py (câmera + IA, roda na máquina de campo) ---
 ultralytics
-opencv-python-headless
+# opencv-python (COM GUI) é necessário para `--gui` e para o calibrar.py;
+# em máquina sem tela, `opencv-python-headless` serve e é mais leve.
+# Precisa ser >= 4.7 (cv2.aruco no pacote principal, para a escala automática).
+opencv-python>=4.7
 numpy
+
+# --- Inferência em CPU (o harvester não tem GPU) ---
+# OpenVINO é o runtime da Intel para CPU: ~5x mais rápido que rodar o .pt
+# no PyTorch. O main.py carrega models/wood_best_openvino_model
+# automaticamente se existir; gere com `python exportar_modelo.py`.
+openvino>=2024.0
+# onnx/onnxslim só são usados pelo export (exportar_modelo.py), não na
+# inferência -- podem ser omitidos na máquina de campo se o export vier pronto.
+onnx
+onnxslim
+# nncf: quantização INT8 no export (2x mais rápido que FP32 em CPU)
+nncf
+pyyaml
 
 # --- sync_daemon.py (roda perto do PostgreSQL central) ---
 psycopg2-binary
 python-dotenv
 
-# Sem dependência de sensor -- distância câmera-tora é uma constante
-# calibrada em Config (main.py), não medida por hardware. Único hardware
-# necessário em qualquer ponto do projeto é a câmera.
+# Sem dependência de sensor -- a escala px->cm vem do marcador ArUco no
+# cabeçote (ou de constante calibrada), e a distância câmera-tora é fixa.
+# Único hardware necessário em qualquer ponto do projeto é a câmera.

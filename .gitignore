@@ -39,3 +39,9 @@ prompt.txt
 train/
 tests/resultados_teste/
 tests/runs/
+/capturas/
+# Export do modelo para CPU (gerado por exportar_modelo.py, ~170 MB)
+/models/*_openvino_model/
+/models/*_ncnn_model/
+/models/*.onnx
+kernel.errors.txt

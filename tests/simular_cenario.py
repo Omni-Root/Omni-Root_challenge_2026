@@ -1,240 +1,138 @@
 """
-simular_cenario.py — Simulador Completo End-to-End da Operação Florestal
+simular_cenario.py — Simulador end-to-end SEM câmera
 Projeto: Qualidade da Madeira — Challenge FIAP x John Deere/Suzano
 
-O QUE ESTE SCRIPT FAZ:
-1. Carrega imagens reais de teste (do dataset de validação ou gera sintetizadas se necessário)
-2. Simula o ciclo da máquina colhedora John Deere processando cada tora
-3. Executa o modelo YOLOv8 para detecção de defeitos
-4. Simula os sensores de ultrassom (distância) e força (densidade)
-5. Aplica visão computacional para contorno e tortuosidade
-6. Salva todas as inspeções no banco SQLite local (omni_root_local.db)
-7. Executa o exportador StanForD 2010 (.hpr) para demonstrar a saída oficial
-8. Exibe um relatório estatístico completo da operação
+Roda o MESMO pipeline do main.py (`analisar_frame`) sobre imagens de
+disco -- ou sobre frames sintéticos, se não houver imagem nenhuma -- e
+grava cada inspeção no SQLite local, exatamente como a máquina faria.
 
-USO:
-    python simular_cenario.py
-    python simular_cenario.py --num-toras 15
+Serve para:
+  - testar mudanças no pipeline sem tora física nem webcam;
+  - popular o SQLite (e, via sync_daemon.py, o Postgres/dashboard) com
+    dados de demonstração produzidos pelo código real, não por seed.
+
+USO (a partir da raiz do repositório):
+    python tests/simular_cenario.py
+    python tests/simular_cenario.py --num-toras 15 --pasta ./fotos_eucalipto
+    python tests/simular_cenario.py --config-file ./config.json --clone GG100
 """
 
 import argparse
 import random
-import sqlite3
-import time
+import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
-from ultralytics import YOLO
 
-# Importa as funções principais do main.py
-from main import (
-    CONFIG,
-    SensorSimulado,
-    calcular_densidade_estimada,
-    calcular_dimensao_real_cm,
-    calcular_massa_seca_kg,
-    calcular_porcentagem_casca,
-    calcular_tortuosidade,
-    calcular_volume_m3,
-    classificar_qualidade,
+# Permite `python tests/simular_cenario.py` a partir da raiz do repositório.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from main import (  # noqa: E402
+    FiltroPersistencia,
+    analisar_frame,
+    carregar_configuracao_json,
+    carregar_modelo,
     conectar_banco,
-    extrair_contorno_tora,
-    extrair_defeitos_yolo,
+    resumir_analise,
     salvar_inspecao,
 )
 
-
-def carregar_modelo():
-    """Tenta carregar o melhor modelo treinado ou o YOLOv8 padrão."""
-    caminhos_modelo = [
-        Path("../models/wood_best.pt"),
-        Path("../models/wood_ncnn_model"),
-        Path("../yolov8n.pt"),
-    ]
-    for caminho in caminhos_modelo:
-        if caminho.exists():
-            print(f"📦 Carregando modelo IA: {caminho}")
-            return YOLO(str(caminho), task="detect")
-
-    print("⚠️ Nenhum modelo local encontrado. Baixando yolov8n.pt padrão...")
-    return YOLO("yolov8n.pt", task="detect")
+EXTENSOES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 
-def obter_imagens_teste(pasta_dataset: Path, num_imagens: int) -> list[np.ndarray]:
-    """Busca imagens de teste no dataset local ou gera frames sintetizados."""
-    imagens_encontradas = list(pasta_dataset.rglob("*.jpg")) + list(pasta_dataset.rglob("*.png"))
-
-    frames = []
-    if imagens_encontradas:
-        amostra = random.sample(imagens_encontradas, min(num_imagens, len(imagens_encontradas)))
-        for img_path in amostra:
-            img = cv2.imread(str(img_path))
-            if img is not None:
-                frames.append(img)
-
-    # Se não houver imagens suficientes no disco, gera imagens sintéticas de tora
-    while len(frames) < num_imagens:
-        h, w = 640, 640
-        # Fundo verde floresta / terra
-        fundo = np.zeros((h, w, 3), dtype=np.uint8)
-        fundo[:, :] = (35, 60, 30)
-
-        # Desenha uma tora (cilindro marrom)
-        cor_tora = (40, 90, 150)
-        pt1 = (random.randint(200, 250), 50)
-        pt2 = (random.randint(380, 440), 590)
-        cv2.line(fundo, pt1, pt2, cor_tora, thickness=random.randint(120, 180))
-
-        # Adiciona algumas manchas/ruídos como potenciais nó/defeitos
-        if random.random() > 0.4:
-            cx = (pt1[0] + pt2[0]) // 2 + random.randint(-20, 20)
-            cy = (pt1[1] + pt2[1]) // 2 + random.randint(-50, 50)
-            cv2.circle(fundo, (cx, cy), random.randint(15, 35), (20, 40, 70), -1)
-
-        frames.append(fundo)
-
-    return frames[:num_imagens]
+def frame_sintetico(seed: int) -> np.ndarray:
+    """Tora "desenhada": só para o pipeline ter o que processar sem imagem real."""
+    rng = random.Random(seed)
+    h, w = 720, 1280
+    fundo = np.full((h, w, 3), (35, 60, 30), dtype=np.uint8)          # verde-terra
+    cor_tora = (40, 90, 150)                                            # marrom (BGR)
+    pt1 = (rng.randint(500, 560), 40)
+    pt2 = (rng.randint(700, 780), h - 40)
+    cv2.line(fundo, pt1, pt2, cor_tora, thickness=rng.randint(180, 260))
+    if rng.random() > 0.4:                                              # mancha escura = "nó"
+        cx = (pt1[0] + pt2[0]) // 2 + rng.randint(-30, 30)
+        cy = h // 2 + rng.randint(-150, 150)
+        cv2.circle(fundo, (cx, cy), rng.randint(15, 35), (20, 40, 70), -1)
+    return fundo
 
 
-def rodar_simulacao(num_toras: int = 10):
-    print("=" * 65)
-    print("🌲 SIMULADOR DE COLHEITA FLORESTAL — JOHN DEERE x SUZANO (PoC)")
-    print("=" * 65)
+def obter_frames(pasta: Path | None, num: int) -> list[tuple[str, np.ndarray]]:
+    frames: list[tuple[str, np.ndarray]] = []
+    if pasta is not None and pasta.exists():
+        arquivos = sorted(p for p in pasta.rglob("*") if p.suffix.lower() in EXTENSOES)
+        if arquivos:
+            for p in random.sample(arquivos, min(num, len(arquivos))):
+                img = cv2.imread(str(p))
+                if img is not None:
+                    frames.append((p.name, img))
+    i = 0
+    while len(frames) < num:
+        frames.append((f"sintetico_{i:02d}", frame_sintetico(i)))
+        i += 1
+    return frames[:num]
 
-    cfg = CONFIG
-    cfg.sqlite_path = "./omni_root_local.db"
 
-    modelo = carregar_modelo()
-    sensores = SensorSimulado()
-    conexao = conectar_banco(cfg)
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Simulador de inspeção de madeira sem câmera")
+    parser.add_argument("--num-toras", type=int, default=10)
+    parser.add_argument("--pasta", type=str, default="./dataset/wood_yolo/images/val",
+                        help="Pasta com imagens de teste (se vazia/inexistente, gera frames sintéticos)")
+    parser.add_argument("--config-file", type=str, default="./config.json")
+    parser.add_argument("--clone", type=str, default=None)
+    parser.add_argument("--sem-banco", action="store_true", help="Só analisa, não grava no SQLite")
+    args = parser.parse_args()
 
-    pasta_val = Path("./dataset/wood_yolo/images/val")
-    if not pasta_val.exists():
-        pasta_val = Path("./data")
+    cfg = carregar_configuracao_json(args.config_file)
+    if args.clone:
+        cfg.clone_id = args.clone
 
-    print(f"📸 Coletando {num_toras} imagens de amostra para simular a operação...")
-    frames = obter_imagens_teste(pasta_val, num_toras)
+    print("=" * 70)
+    print("🌲 SIMULADOR DE INSPEÇÃO — mesmo pipeline do main.py, sem câmera")
+    print("=" * 70)
+    modelo = carregar_modelo(cfg)
+    conexao = None if args.sem_banco else conectar_banco(cfg)
+    persistencia = FiltroPersistencia(min_ocorrencias=max(1, cfg.filtro_persistencia))
 
-    resumo_estatistico = {"aprovado": 0, "quarentena": 0, "reprovado": 0}
-    historico_toras = []
+    frames = obter_frames(Path(args.pasta) if args.pasta else None, args.num_toras)
+    print(f"📸 {len(frames)} frames ({sum(1 for n, _ in frames if not n.startswith('sintetico'))} reais)\n")
 
-    print("\n🚀 Iniciando ciclo automático de colheita no cabeçote da máquina:\n")
+    resumo = {"aprovado": 0, "quarentena": 0, "reprovado": 0}
+    volume_total = 0.0
+    massa_total = 0.0
+    for idx, (nome, frame) in enumerate(frames, start=1):
+        # Persistência exige o defeito em N análises seguidas: com a peça
+        # "parada" na frente da câmera, cada frame é analisado N vezes,
+        # como aconteceria ao vivo.
+        persistencia.reset()
+        a = None
+        for _ in range(max(1, cfg.filtro_persistencia)):
+            a = analisar_frame(frame, modelo, cfg, persistencia)
+        assert a is not None
 
-    for idx, frame in enumerate(frames, start=1):
-        # 1. Inferência YOLO
-        resultados = modelo.predict(
-            source=frame,
-            conf=cfg.conf_threshold,
-            iou=cfg.iou_threshold,
-            imgsz=cfg.imgsz,
-            device="cpu",
-            verbose=False,
-        )
-        resultado = resultados[0]
-        defeitos = extrair_defeitos_yolo(resultado, cfg, frame.shape)
+        uuid_gerado = "sem-banco"
+        if conexao is not None:
+            uuid_gerado = salvar_inspecao(conexao, cfg, a["indicadores"], a["defeitos"], a["status"], a["confianca_saude"])
 
-        # 2. Confiança da saúde
-        if defeitos:
-            maior_conf = max(d["confianca"] for d in defeitos)
-            confianca_saude = round(max(0.0, 1.0 - (maior_conf * 0.5)), 4)
-        else:
-            confianca_saude = 1.0
+        resumo[a["status"]] += 1
+        volume_total += a["indicadores"]["volume_util"]["valor"]
+        massa_total += a["indicadores"]["massa_seca"]["valor"]
+        print(f"#{idx:02d} {nome:<28} " + resumir_analise(uuid_gerado, cfg, a))
 
-        # 3. Sensores & Métricas
-        distancia_cm = sensores.ler_distancia_cm()
+    if conexao is not None:
+        conexao.close()
 
-        contorno_tora = extrair_contorno_tora(frame)
-        if contorno_tora is not None and len(contorno_tora) > 0:
-            _, _, w_box, h_box = cv2.boundingRect(contorno_tora)
-            largura_px = float(w_box)
-            altura_px = float(h_box)
-        else:
-            largura_px = float(frame.shape[1] * 0.2)
-            altura_px = float(frame.shape[0] * 0.7)
-
-        altura_cm = calcular_dimensao_real_cm(altura_px, distancia_cm, cfg)
-        diametro_cm = calcular_dimensao_real_cm(largura_px, distancia_cm, cfg)
-        densidade = calcular_densidade_estimada(cfg.clone_id)
-        tortuosidade = calcular_tortuosidade(contorno_tora)
-        porcentagem_casca = calcular_porcentagem_casca(frame, contorno_tora)
-        volume_util_m3 = calcular_volume_m3(diametro_cm, altura_cm, confianca_saude)
-        massa_seca_kg = calcular_massa_seca_kg(volume_util_m3, densidade)
-
-        indicadores = {
-            "densidade": {"valor": densidade, "unidade": "kg/m3", "metodo": f"lookup_referencia_clone_{cfg.clone_id}"},
-            "massa_seca": {"valor": massa_seca_kg, "unidade": "kg", "metodo": "calculado_volume_x_densidade"},
-            "altura": {"valor": altura_cm, "unidade": "cm", "metodo": "imagem_gsd_ultrassom"},
-            "diametro": {"valor": diametro_cm, "unidade": "cm", "metodo": "imagem_gsd_ultrassom"},
-            "tortuosidade": {"valor": tortuosidade, "unidade": "indice", "metodo": "opencv_contorno"},
-            "porcentagem_casca": {"valor": porcentagem_casca, "unidade": "%", "metodo": "opencv_textura_hsv"},
-            "volume_util": {"valor": volume_util_m3, "unidade": "m3", "metodo": "geometria_medida"},
-            "apodrecimento_pragas": {
-                "valor": round(confianca_saude * 100, 2),
-                "unidade": "%",
-                "metodo": "yolo",
-            },
-        }
-
-        status = classificar_qualidade(confianca_saude, defeitos, cfg)
-        uuid_gerado = salvar_inspecao(conexao, cfg, indicadores, defeitos, status, confianca_saude)
-
-        resumo_estatistico[status] += 1
-        historico_toras.append({
-            "uuid": uuid_gerado[:8],
-            "status": status,
-            "saude": confianca_saude,
-            "altura": altura_cm,
-            "diametro": diametro_cm,
-            "densidade": densidade,
-            "tortuosidade": tortuosidade,
-            "volume": volume_util_m3,
-            "defeitos": len(defeitos),
-        })
-
-        emoji = {"aprovado": "✅", "quarentena": "⚠️", "reprovado": "❌"}[status]
-        print(
-            f"Tora #{idx:02d} {emoji} [{uuid_gerado[:8]}] Status: {status:<10} | "
-            f"Saúde IA: {confianca_saude:>6.1%} | Altura: {altura_cm:>5.1f}cm | "
-            f"Diâmetro: {diametro_cm:>5.1f}cm | "
-            f"Densid.: {densidade:>5.1f}kg/m³ | Casca: {porcentagem_casca:>4.1f}% | "
-            f"Tortuosos.: {tortuosidade:>5.2f} | Volume: {volume_util_m3:>5.3f}m³"
-        )
-        time.sleep(0.1)
-
-    conexao.close()
-
-    print("\n" + "=" * 65)
-    print("📊 RELATÓRIO CONSOLIDADO DA SIMULAÇÃO FLORESTAL")
-    print("=" * 65)
-    print(f"Total de Toras Inspecionadas : {num_toras}")
-    print(f"✅ Aprovadas                : {resumo_estatistico['aprovado']} ({resumo_estatistico['aprovado']/num_toras:.1%})")
-    print(f"⚠️  Quarentena (Revisão)     : {resumo_estatistico['quarentena']} ({resumo_estatistico['quarentena']/num_toras:.1%})")
-    print(f"❌ Reprovadas                : {resumo_estatistico['reprovado']} ({resumo_estatistico['reprovado']/num_toras:.1%})")
-    volume_total_m3 = sum(t["volume"] for t in historico_toras)
-    print(f"🪵 Volume útil total         : {volume_total_m3:.3f} m³")
-    print(f"💾 Registros armazenados em  : ./omni_root_local.db")
-
-    # Testa exportação StanForD 2010
-    print("\n📄 Gerando arquivo oficial StanForD 2010 (.hpr)...")
-    try:
-        import subprocess
-
-        res = subprocess.run(["python", "stanford_export.py"], capture_output=True, text=True)
-        if res.returncode == 0:
-            print(res.stdout.strip())
-            print("✅ Exportação StanForD 2010 concluída com sucesso!")
-        else:
-            print(f"⚠️ Erro ao exportar StanForD: {res.stderr}")
-    except Exception as e:
-        print(f"⚠️ Falha ao executar stanford_export.py: {e}")
-
-    print("\n✨ Simulação finalizada com sucesso! O sistema está 100% operacional.")
+    n = len(frames)
+    print("\n" + "=" * 70)
+    print("📊 RESUMO")
+    print("=" * 70)
+    for status, emoji in (("aprovado", "✅"), ("quarentena", "⚠️"), ("reprovado", "❌")):
+        print(f"{emoji} {status:<11}: {resumo[status]:>3} ({resumo[status] / n:.0%})")
+    print(f"🪵 Volume útil total : {volume_total:.3f} m³")
+    print(f"⚖️  Massa seca total  : {massa_total:.1f} kg (estimada: volume medido x densidade do clone {cfg.clone_id})")
+    if conexao is not None:
+        print(f"💾 Gravado em        : {cfg.sqlite_path} (rode sync_daemon.py para enviar ao Postgres)")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Simulador de Inspeção de Madeira John Deere")
-    parser.add_argument("--num-toras", type=int, default=10, help="Quantidade de toras para simular")
-    args = parser.parse_args()
-
-    rodar_simulacao(args.num_toras)
+    main()

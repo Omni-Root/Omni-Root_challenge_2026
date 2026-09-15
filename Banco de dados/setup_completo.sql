@@ -327,3 +327,33 @@ ON CONFLICT (clone_id) DO NOTHING;
 --   'literatura'          -> valor publicado para ESTE clone
 --   'referencia_generica' -> média do híbrido, aguardando dado do clone
 -- ============================================================
+
+-- ############################################################
+-- PARTE 4 — AVISO EM TEMPO REAL PARA O DASHBOARD (LISTEN/NOTIFY)
+-- ############################################################
+-- Cada tora inserida pelo sync_daemon.py publica um NOTIFY no canal
+-- 'omniroot_toras' (no COMMIT, quando indicadores e defeitos já estão
+-- gravados). O dashboard fica em LISTEN e atualiza os painéis sem F5.
+-- Mesmo conteúdo de migration_notify_toras.sql.
+
+CREATE OR REPLACE FUNCTION notificar_nova_tora() RETURNS trigger AS $$
+BEGIN
+    PERFORM pg_notify(
+        'omniroot_toras',
+        json_build_object(
+            'id',            NEW.id,
+            'uuid_local',    NEW.uuid_local,
+            'status',        NEW.status_classificacao,
+            'maquina_id',    NEW.maquina_id,
+            'talhao_id',     NEW.talhao_id,
+            'data_inspecao', NEW.data_inspecao
+        )::text
+    );
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_notificar_nova_tora ON toras_inspecionadas;
+CREATE TRIGGER trg_notificar_nova_tora
+    AFTER INSERT ON toras_inspecionadas
+    FOR EACH ROW EXECUTE FUNCTION notificar_nova_tora();

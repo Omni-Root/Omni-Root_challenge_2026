@@ -1,31 +1,32 @@
 """
-main.py — Script principal do Raspberry Pi (Tarefa 2)
+main.py — Inspeção de toras na máquina de campo (Windows Embedded / maquete)
 Projeto: Qualidade da Madeira — Challenge FIAP x John Deere/Suzano
 
 O que este script faz, em ordem:
-  1. Captura um frame da câmera acoplada à máquina
-  2. Roda o modelo YOLO (NCNN) para detectar defeitos (praga, apodrecimento)
-  3. Converte pixel -> cm real usando uma distância câmera-tora FIXA e
-     calibrada (não sensor físico — a câmera é montada numa posição fixa
-     em relação à tora, então a distância não muda entre leituras)
-  4. Calcula os 4 indicadores de qualidade (densidade, altura, tortuosidade,
-     apodrecimento_pragas) — densidade vem de um lookup por clone/material
-     genético (data/clones_densidade.json), NÃO de sensor físico
-  5. Classifica a tora (aprovado / quarentena / reprovado) usando o limiar
-     de confiança de 85%
-  6. Grava tudo no SQLite local (schema_sqlite.sql), pronto para o
-     sync.go sincronizar com o PostgreSQL quando houver rede
+  1. Captura um frame da câmera acoplada à garra do harvester
+  2. Recorta a região de interesse (ROI) onde a tora sempre aparece —
+     a câmera é fixa, então o resto do frame é fundo e pode ser ignorado
+  3. Roda o modelo YOLO (8 classes de defeito) no recorte pré-processado
+     (grayscale + CLAHE, igual ao treino)
+  4. Filtra falsos positivos (área mínima, dentro do contorno, persistência)
+  5. Converte pixel -> cm real usando uma distância câmera-tora FIXA e
+     calibrada (não sensor físico)
+  6. Calcula os 8 indicadores de qualidade — densidade vem de um lookup por
+     clone/material genético (data/clones_densidade.json, sincronizado do
+     PostgreSQL central), NÃO de sensor físico
+  7. Classifica a tora (aprovado / quarentena / reprovado) ponderando a
+     gravidade de cada defeito para a indústria de celulose
+  8. Grava tudo no SQLite local (schema_sqlite.sql), pronto para o
+     sync_daemon.py sincronizar com o PostgreSQL quando houver rede
 
 Modo de uso:
-  python3 main.py --simulado --gui
-
-  (a distinção entre "Raspberry real" e "simulado" não existe mais para o
-  sensor — o único hardware é a câmera. --simulado agora só controla se a
-  janela com as bounding boxes é exibida na demonstração.)
+  python main.py --gui                       # câmera do config.json
+  python main.py --gui --fonte video.mp4     # vídeo gravado (plano B na demo)
+  python main.py --gui --fonte ./fotos/      # pasta de imagens, em loop
 
 Dependências (requirements.txt):
   ultralytics
-  opencv-python-headless
+  opencv-python (ou opencv-python-headless sem --gui)
   numpy
 """
 
@@ -61,18 +62,41 @@ class Config:
     sqlite_path: str = "./omni_root_local.db"
 
     # --- Modelo de IA ---
-    modelo_ncnn_path: str = "./models/wood_ncnn_model"
+    # Ordem de busca: modelo_path (se existir) > OpenVINO INT8 > OpenVINO
+    # FP32 > NCNN > .pt. OpenVINO é o runtime da Intel para CPU (o harvester
+    # NÃO tem GPU). Medido neste notebook, mesmo estado térmico: .pt a 1024
+    # 2.400 ms; .pt a 640 1.050 ms; OpenVINO FP32 640 ~1.000 ms; OpenVINO
+    # INT8 640 ~500 ms. Gere com `python exportar_modelo.py` (uma vez por máquina).
+    modelo_path: str = "./models/wood_best_int8_openvino_model"
+    modelo_ncnn_path: str = "./models/wood_ncnn_model"   # compatibilidade
     conf_threshold: float = 0.40
     iou_threshold: float = 0.55
-    imgsz: int = 1024
+    # A webcam entrega 640x480: inferir a 1024 só amplia pixel, sem informação
+    # nova, e custa 3x. O export OpenVINO/NCNN é gerado com tamanho FIXO --
+    # tem que ser o mesmo daqui (exportar_modelo.py lê este valor).
+    imgsz: int = 640
 
     # --- Câmera ---
     camera_index: int = 0
     intervalo_captura_seg: float = 2.0  # tempo entre análises
 
+    # --- Região de interesse (ROI), em fração do frame [x, y, w, h] ---
+    # A câmera é fixa na garra: a tora SEMPRE aparece na mesma região do
+    # frame. Tudo fora dela (fundo, mão de quem segura a peça na demo,
+    # mesa, teclado...) é cortado ANTES da inferência — o modelo nem vê.
+    # É o filtro mais barato e mais eficaz contra detecção fora da madeira.
+    # null/None desliga (usa o frame inteiro). Ex.: [0.2, 0.05, 0.6, 0.9]
+    roi: list | None = None
+
     # --- Regra de negócio (limiar de aprovação) ---
     limiar_aprovacao: float = 0.85       # 85% de confiança mínima
     limiar_quarentena: float = 0.60      # abaixo disso já é reprovado direto
+
+    # --- Filtros de inferência (reduzem falso positivo na demo) ---
+    # Ver as funções filtrar_* e FiltroPersistencia.
+    filtro_area_minima: float = 0.0008   # fração da área do frame; 0 desliga
+    filtro_dentro_contorno: bool = True  # descarta defeito fora da madeira
+    filtro_persistencia: int = 2         # análises consecutivas p/ confirmar; 1 desliga
 
     # --- Distância câmera-tora, FIXA e calibrada (sem sensor) ---
     # A câmera é montada numa posição fixa em relação à tora (no braço do
@@ -83,11 +107,38 @@ class Config:
     # sensor físico é necessário.
     distancia_camera_tora_cm: float = 45.0
 
-    # --- Câmera: parâmetros para cálculo de dimensão real (GSD) ---
-    # Precisam ser calibrados com a câmera real usada na apresentação!
+    # --- Conversão pixel -> cm ---
+    # Duas formas, em ordem de preferência:
+    #
+    #   (a) cm_por_px > 0: calibração DIRETA com régua. Com a câmera na
+    #       posição final, coloquem uma régua onde a tora fica, meçam
+    #       quantos pixels correspondem a 10 cm no frame e dividam:
+    #       cm_por_px = 10 / pixels. É o método mais preciso e o mais
+    #       fácil de explicar para a banca. Quando definido, ignora (b).
+    #
+    #   (b) cm_por_px = 0: fórmula de GSD a partir da óptica da câmera
+    #       (distância x largura do sensor / foco x largura do frame).
+    #       Os valores abaixo são genéricos de webcam — só servem como
+    #       ordem de grandeza até calibrar com a régua.
+    #
+    # A largura do frame em pixels vem do próprio frame capturado
+    # (frame.shape[1]); NÃO é o imgsz do modelo — o Ultralytics devolve
+    # as caixas já nas coordenadas do frame original.
+    cm_por_px: float = 0.0
     distancia_focal_mm: float = 4.0      # foco da lente
     largura_sensor_mm: float = 6.3       # largura física do sensor da câmera
-    largura_imagem_px: int = 640         # resolução usada na inferência
+
+    # --- Escala AUTOMÁTICA por marcador ArUco (ver escala_por_marcador) ---
+    # Lado do marcador impresso, em cm. Se o marcador aparecer no frame, a
+    # escala vem dele e ignora cm_por_px/GSD. 0 desliga.
+    marcador_aruco_cm: float = 5.0
+
+    # --- Comprimento de traçamento do talhão, em cm ---
+    # O harvester corta a tora em comprimento FIXO (setpoint da operação:
+    # 6 m é o padrão de celulose no Brasil). Quando a câmera vê só a SEÇÃO
+    # (rodela), o comprimento não é mensurável na imagem e o volume usa
+    # este valor — é o mesmo que o cabeçote usa para traçar.
+    comprimento_corte_cm: float = 600.0
 
 
 # ============================================================
@@ -177,8 +228,26 @@ def carregar_configuracao_json(caminho_json: str = "./config.json") -> Config:
                     for k, v in dados.items():
                         if hasattr(cfg, k):
                             setattr(cfg, k, v)
+                        elif k == "largura_imagem_px":
+                            print(
+                                "ℹ️  'largura_imagem_px' não é mais usado: a largura vem do "
+                                "próprio frame da câmera. Pode remover do config.json."
+                            )
         except Exception as e:
             print(f"⚠️ Erro ao carregar {caminho_json}: {e}")
+
+    # ROI precisa ser [x, y, w, h] em fração do frame, tudo em (0, 1].
+    if cfg.roi is not None:
+        ok = (
+            isinstance(cfg.roi, (list, tuple)) and len(cfg.roi) == 4
+            and all(isinstance(v, (int, float)) for v in cfg.roi)
+            and 0.0 <= cfg.roi[0] < 1.0 and 0.0 <= cfg.roi[1] < 1.0
+            and 0.0 < cfg.roi[2] <= 1.0 - cfg.roi[0]
+            and 0.0 < cfg.roi[3] <= 1.0 - cfg.roi[1]
+        )
+        if not ok:
+            print(f"⚠️ 'roi' inválida ({cfg.roi}); esperado [x, y, w, h] em fração do frame. Ignorando.")
+            cfg.roi = None
     return cfg
 
 
@@ -190,18 +259,30 @@ CONFIG = carregar_configuracao_json()
 # CÁLCULO DOS INDICADORES DE QUALIDADE
 # ============================================================
 
-def calcular_dimensao_real_cm(tamanho_px: float, distancia_cm: float, cfg: Config) -> float:
+def calcular_cm_por_px(cfg: Config, largura_frame_px: int) -> float:
     """
-    Converte um tamanho em pixels para centímetros reais, usando a
-    trigonometria de GSD (Ground Sample Distance) — a mesma lógica
-    usada em fotografia aérea, adaptada para distância câmera-tora.
+    Fator de conversão pixel -> cm para o frame capturado.
 
-    GSD (cm/pixel) = (distância_cm * largura_sensor_mm) / (foco_mm * largura_imagem_px)
+    Se o config tiver `cm_por_px` calibrado com régua, usa direto. Senão,
+    cai na fórmula de GSD (Ground Sample Distance) — a mesma lógica usada
+    em fotografia aérea, adaptada para a distância câmera-tora fixa:
+
+        GSD (cm/px) = (distância_cm * largura_sensor_mm) / (foco_mm * largura_frame_px)
+
+    `largura_frame_px` é a largura REAL do frame da câmera (frame.shape[1]),
+    porque é nesse sistema de coordenadas que as caixas do YOLO e o contorno
+    do OpenCV são medidos.
     """
-    gsd_cm_por_px = (distancia_cm * cfg.largura_sensor_mm) / (
-        cfg.distancia_focal_mm * cfg.largura_imagem_px
+    if cfg.cm_por_px and cfg.cm_por_px > 0:
+        return float(cfg.cm_por_px)
+    return (cfg.distancia_camera_tora_cm * cfg.largura_sensor_mm) / (
+        cfg.distancia_focal_mm * max(1, int(largura_frame_px))
     )
-    return round(tamanho_px * gsd_cm_por_px, 2)
+
+
+def calcular_dimensao_real_cm(tamanho_px: float, cm_por_px: float) -> float:
+    """Converte um tamanho em pixels para centímetros reais."""
+    return round(float(tamanho_px) * float(cm_por_px), 2)
 
 
 def calcular_volume_m3(diametro_cm: float, comprimento_cm: float, confianca_saude: float) -> float:
@@ -293,51 +374,62 @@ def calcular_densidade_estimada(clone_id: str, inventario_stats: dict | None = N
     return round(float(info["densidade_base"]), 1)
 
 
+def _mascara_do_contorno(shape: tuple, contorno) -> np.ndarray:
+    """Máscara binária (255 dentro) a partir de um contorno, no tamanho do frame."""
+    mask = np.zeros(shape[:2], dtype=np.uint8)
+    pts = np.asarray(contorno, dtype=np.int32).reshape(-1, 1, 2)
+    cv2.drawContours(mask, [pts], -1, 255, -1)
+    return mask
+
+
 def calcular_porcentagem_casca(frame: np.ndarray | None, contorno: np.ndarray | None) -> float:
     """
-    Mede a proporção da área de casca (%) em relação à seção da tora via OpenCV,
-    analisando a diferença entre a área total do contorno e a região interna
-    (obtida por erosão morfológica).
+    Casca RESIDUAL: % da superfície visível da tora ainda coberta por casca.
 
-    Para eucalipto comercial, a faixa típica fica entre 8% e 20%. Valores fora
-    dessa faixa não são impossíveis (tora descascada = ~2%, casca muito grossa
-    ou contorno mal segmentado = >25%), mas geram um aviso no log.
+    É a grandeza que interessa à fábrica no enunciado do desafio ("casca
+    excessiva influencia na qualidade da celulose"): o cabeçote do harvester
+    descasca o eucalipto na colheita, e o que chega à fábrica é a casca que
+    SOBROU. Uma câmera lateral vê exatamente isso.
 
-    Retorna o valor REAL medido, sem clamp — se o número parecer estranho, é
-    sinal de que o contorno precisa de ajuste, não de que devemos esconder a
-    medida.
+    Método (OpenCV clássico, sem modelo):
+      1. Só olha os pixels DENTRO do contorno da tora.
+      2. Separa esses pixels em dois grupos de brilho por Otsu. Em
+         eucalipto descascado, madeira exposta é clara (creme/amarelada) e
+         casca residual é escura (marrom/cinza) -- é essa diferença que o
+         método usa. Pré-condição: iluminação razoavelmente uniforme.
+      3. casca % = pixels do grupo escuro / pixels da tora.
+
+    Se não há contraste dentro da tora (desvio-padrão < 12 níveis de
+    cinza), não dá para separar casca de madeira -- devolve 0.0 em vez de
+    inventar uma divisão. Versão anterior media um anel de largura fixa
+    por erosão morfológica: o número dependia do tamanho da tora em
+    pixels, não da casca -- foi substituída.
     """
-    if frame is None or contorno is None or len(contorno) < 5:
+    if frame is None or contorno is None or len(contorno) < 3:
         return 0.0  # sem dados suficientes para medir — retorna 0 (desconhecido)
 
     try:
-        mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-        if isinstance(contorno, list):
-            contorno_pts = np.array(contorno, dtype=np.int32)
-        else:
-            contorno_pts = contorno.astype(np.int32)
-        cv2.drawContours(mask, [contorno_pts], -1, 255, -1)
-
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
-        mask_miolo = cv2.erode(mask, kernel, iterations=2)
-        mask_casca = cv2.subtract(mask, mask_miolo)
-
-        area_total = float(np.count_nonzero(mask))
-        area_casca = float(np.count_nonzero(mask_casca))
-
-        if area_total <= 0:
+        mask = _mascara_do_contorno(frame.shape, contorno)
+        cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # Suaviza a textura fina da madeira para o Otsu separar CASCA x
+        # MADEIRA, e não veio x veio.
+        cinza = cv2.GaussianBlur(cinza, (9, 9), 0)
+        pixels = cinza[mask > 0]
+        if pixels.size < 100:
             return 0.0
+        if float(pixels.std()) < 12.0:
+            return 0.0  # superfície uniforme: sem casca distinguível
 
-        pct = (area_casca / area_total) * 100.0
-        pct = round(float(pct), 1)
+        limiar, _ = cv2.threshold(pixels.reshape(-1, 1), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        escuros = int(np.count_nonzero(pixels < limiar))
+        pct = round(100.0 * escuros / float(pixels.size), 1)
 
         # Aviso de outlier (não bloqueia, só informa)
-        if pct < 5.0 or pct > 30.0:
+        if pct > 60.0:
             print(
-                f"⚠️  Porcentagem de casca fora da faixa típica de eucalipto "
-                f"(8-20%): {pct}%. Verifique a segmentação do contorno."
+                f"⚠️  Casca residual muito alta ({pct}%). Ou a tora não foi descascada, "
+                f"ou a iluminação/segmentação está enganando o Otsu — confira na tela."
             )
-
         return pct
     except Exception:
         return 0.0
@@ -378,11 +470,163 @@ def preprocessar_para_modelo(frame: np.ndarray) -> np.ndarray:
         return frame
 
 
+# ============================================================
+# FILTROS DE INFERÊNCIA — reduzem falso positivo na demo ao vivo
+# ============================================================
+# O modelo tem Precision ~0.72: cerca de 3 em cada 10 detecções são
+# falsas. Numa demonstração ao vivo isso aparece como "detectou um
+# defeito no nada". Retreinar não resolve a tempo — mas três filtros
+# baratos, aplicados DEPOIS da inferência, cortam a maior parte:
+#
+#   1. ÁREA MÍNIMA   -> caixa minúscula quase sempre é ruído
+#   2. DENTRO DA TORA-> defeito fora do contorno da madeira é impossível
+#   3. PERSISTÊNCIA  -> falso positivo pisca, defeito real permanece
+#
+# Nenhum deles mexe no modelo; todos são reversíveis por config.
+# ============================================================
+
+def filtrar_por_area_minima(defeitos: list, area_min_relativa: float = 0.0008) -> list:
+    """
+    Descarta caixas muito pequenas. Num frame de 1024x1024, 0.0008
+    equivale a ~840 px² (uma caixa de ~29x29). Defeito real que
+    aparece menor que isso também não seria confiável na prática.
+    """
+    return [d for d in defeitos if d.get("area_relativa", 0.0) >= area_min_relativa]
+
+
+def filtrar_dentro_do_contorno(defeitos: list, contorno, margem_px: int = 20, mascara_interior=None) -> list:
+    """
+    Mantém apenas defeitos cujo CENTRO cai dentro da tora.
+
+    É o filtro mais eficaz para a demonstração: elimina detecção na
+    mesa, na mão de quem segura a peça, no fundo da sala — coisas que
+    o modelo nunca viu no treino e onde ele "alucina" com mais
+    frequência.
+
+    Se `mascara_interior` for dada (tora SEM a faixa de borda/casca), o
+    teste é feito nela: o modelo, treinado em madeira serrada, confunde o
+    anel de casca escuro de uma seção com "Knot_missing" — defeito de
+    fibra fica no miolo, não na borda. Sem máscara, usa o polígono do
+    contorno com uma margem.
+
+    Se nada foi segmentado, não filtra (melhor deixar passar do que
+    esconder tudo por falha de segmentação).
+    """
+    try:
+        mantidos = []
+        if mascara_interior is not None:
+            h, w = mascara_interior.shape[:2]
+            for d in defeitos:
+                cx = int(d["pos_x"] + d["largura"] / 2.0)
+                cy = int(d["pos_y"] + d["altura"] / 2.0)
+                if 0 <= cx < w and 0 <= cy < h and mascara_interior[cy, cx] > 0:
+                    mantidos.append(d)
+            return mantidos
+
+        # 3 pontos já formam um polígono válido para pointPolygonTest.
+        # Usar 5 aqui seria um bug: o CHAIN_APPROX_SIMPLE do OpenCV comprime
+        # um contorno retangular (uma tora vista de lado, por exemplo) para
+        # exatamente 4 pontos -- e o filtro deixaria de funcionar justo no
+        # caso mais comum.
+        if contorno is None or len(contorno) < 3:
+            return defeitos
+        pts = np.array(contorno, dtype=np.int32).reshape(-1, 1, 2)
+        for d in defeitos:
+            cx = d["pos_x"] + d["largura"] / 2.0
+            cy = d["pos_y"] + d["altura"] / 2.0
+            # distância positiva = dentro; negativa = fora
+            dist = cv2.pointPolygonTest(pts, (float(cx), float(cy)), True)
+            if dist >= -margem_px:
+                mantidos.append(d)
+        return mantidos
+    except Exception:
+        return defeitos
+
+
+class FiltroPersistencia:
+    """
+    Exige que um defeito apareça em N análises consecutivas, na mesma
+    região aproximada, antes de ser considerado real.
+
+    Por que funciona: falso positivo do modelo é instável -- aparece
+    num frame e some no próximo. Defeito de verdade, com a peça
+    parada na frente da câmera, é detectado repetidamente no mesmo
+    lugar. Com intervalo de 2s entre análises e min_ocorrencias=2,
+    custa ~2 segundos a mais para confirmar, e corta a maior parte
+    do ruído.
+    """
+
+    def __init__(self, min_ocorrencias: int = 2, tolerancia_px: float = 80.0, memoria: int = 4):
+        self.min_ocorrencias = min_ocorrencias
+        self.tolerancia_px = tolerancia_px
+        self.memoria = memoria
+        self.historico: list[list[dict]] = []
+
+    def _mesma_regiao(self, a: dict, b: dict) -> bool:
+        ax = a["pos_x"] + a["largura"] / 2.0
+        ay = a["pos_y"] + a["altura"] / 2.0
+        bx = b["pos_x"] + b["largura"] / 2.0
+        by = b["pos_y"] + b["altura"] / 2.0
+        return ((ax - bx) ** 2 + (ay - by) ** 2) ** 0.5 <= self.tolerancia_px
+
+    def filtrar(self, defeitos: list) -> list:
+        self.historico.append(defeitos)
+        if len(self.historico) > self.memoria:
+            self.historico.pop(0)
+
+        if len(self.historico) < self.min_ocorrencias:
+            return []  # ainda aquecendo: não afirma nada nos primeiros frames
+
+        confirmados = []
+        for d in defeitos:
+            vistas = sum(
+                1 for frame_ant in self.historico[:-1]
+                if any(self._mesma_regiao(d, ant) and ant["tipo_defeito"] == d["tipo_defeito"]
+                       for ant in frame_ant)
+            )
+            if vistas + 1 >= self.min_ocorrencias:
+                confirmados.append(d)
+        return confirmados
+
+    def ultimo_confirmado(self, defeitos: list) -> list:
+        """Reaplica a decisão da última chamada a `filtrar` sem avançar o histórico (mesmo resultado do modelo)."""
+        if len(self.historico) < self.min_ocorrencias:
+            return []
+        confirmados = []
+        for d in defeitos:
+            vistas = sum(
+                1 for frame_ant in self.historico[:-1]
+                if any(self._mesma_regiao(d, ant) and ant["tipo_defeito"] == d["tipo_defeito"]
+                       for ant in frame_ant)
+            )
+            if vistas + 1 >= self.min_ocorrencias:
+                confirmados.append(d)
+        return confirmados
+
+    def reset(self) -> None:
+        self.historico.clear()
+
+
 def extrair_contorno_tora(frame: np.ndarray) -> np.ndarray | None:
     """
-    Segmenta a região da tora no frame usando técnicas de visão computacional
-    clássica (Otsu thresholding + operações morfológicas).
-    Retorna o contorno principal da tora ou None.
+    Segmenta a região da tora no frame usando visão computacional clássica
+    (Otsu thresholding + operações morfológicas). Retorna o contorno
+    principal da tora ou None.
+
+    Otsu separa o frame em "claro" e "escuro", mas não sabe qual dos dois
+    é a madeira: tora clara em fundo escuro e tora escura em fundo claro
+    (parede branca, mesa clara) são igualmente comuns. Por isso testamos
+    as DUAS polaridades. Blobs que cobrem >95% da área são fundo, não tora.
+
+    Entre os candidatos, preferimos o que CONTÉM O CENTRO do frame: a
+    câmera é fixa e apontada para a tora, então a tora está no meio. Isso
+    resolve o caso mais comum na garra — a tora atravessa o frame de ponta
+    a ponta e divide o fundo em duas faixas do mesmo tamanho que ela;
+    "pegar o maior blob" viraria cara-ou-coroa. Se nenhum candidato contém
+    o centro, fica o de centroide mais próximo dele.
+
+    Use junto com a ROI do config: quanto menos fundo entra aqui, mais
+    confiável fica o contorno.
     """
     if frame is None:
         return None
@@ -390,50 +634,403 @@ def extrair_contorno_tora(frame: np.ndarray) -> np.ndarray | None:
     try:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (7, 7), 0)
-        _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
-        closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-        contornos, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        h, w = frame.shape[:2]
+        area_frame = float(h * w)
+        area_minima = area_frame * 0.05
+        area_maxima = area_frame * 0.95
+        centro = (w / 2.0, h / 2.0)
 
-        if not contornos:
+        candidatos = []
+        for modo in (cv2.THRESH_BINARY, cv2.THRESH_BINARY_INV):
+            _, thresh = cv2.threshold(blurred, 0, 255, modo + cv2.THRESH_OTSU)
+            closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+            contornos, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for c in contornos:
+                a = cv2.contourArea(c)
+                if area_minima <= a <= area_maxima:
+                    candidatos.append((a, c))
+
+        if not candidatos:
             return None
 
-        area_minima = (frame.shape[0] * frame.shape[1]) * 0.05
-        validos = [c for c in contornos if cv2.contourArea(c) >= area_minima]
-        return max(validos, key=cv2.contourArea) if validos else max(contornos, key=cv2.contourArea)
+        # 1º critério: contém o centro (distância >= 0); 2º: centroide mais perto do centro
+        def pontuacao(item):
+            a, c = item
+            contem = cv2.pointPolygonTest(c, centro, False) >= 0
+            m = cv2.moments(c)
+            if m["m00"] > 0:
+                cx, cy = m["m10"] / m["m00"], m["m01"] / m["m00"]
+            else:
+                cx, cy = centro
+            dist = ((cx - centro[0]) ** 2 + (cy - centro[1]) ** 2) ** 0.5
+            return (contem, -dist, a)
+
+        return max(candidatos, key=pontuacao)[1]
     except Exception:
         return None
 
 
-def calcular_tortuosidade(mascara_ou_contorno) -> float:
-    """
-    Calcula um índice de tortuosidade (0 = perfeitamente reta,
-    valores maiores = mais tortuosa) a partir do contorno da tora.
+# ------------------------------------------------------------
+# SEGMENTAÇÃO DA TORA POR COR (madeira x fundo)
+# ------------------------------------------------------------
+# Otsu em escala de cinza separa "claro" de "escuro" — mas madeira
+# descascada é CLARA e uma mesa cinza/branca também é. Foi o que
+# aconteceu nas primeiras demos: o contorno seguia sombras e a borda da
+# mesa, e todos os indicadores herdavam o erro.
+#
+# O que distingue madeira (e casca) de mesa, parede, chão de concreto ou
+# metal da garra não é o brilho, é a SATURAÇÃO: madeira é creme/amarela/
+# marrom (colorida), o fundo industrial é acinzentado. Então:
+#   1. Otsu na SATURAÇÃO (adapta-se à iluminação) + matiz na faixa
+#      amarelo/laranja/marrom;
+#   2. fecha buracos (o anel de casca envolve o miolo);
+#   3. fica com o componente que contém o centro do frame/ROI.
+# Se o fundo também for colorido (mesa de madeira, terra), a saturação
+# não separa -- aí cai no Otsu de brilho de extrair_contorno_tora.
+# ------------------------------------------------------------
 
-    Método: ajusta uma reta ao eixo do contorno e mede o desvio
-    máximo perpendicular a essa reta, normalizado pelo comprimento.
+def segmentar_tora(frame: np.ndarray) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Devolve (mascara, contorno) da tora, ou (None, None)."""
+    if frame is None or frame.size == 0:
+        return None, None
+    try:
+        h, w = frame.shape[:2]
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        hue, sat, val = cv2.split(hsv)
+        sat_b = cv2.GaussianBlur(sat, (9, 9), 0)
+
+        limiar_s, _ = cv2.threshold(sat_b, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # Fundo colorido demais (limiar alto) ou frame sem cor nenhuma:
+        # saturação não separa -> deixa o Otsu de brilho decidir.
+        if limiar_s < 18 or limiar_s > 140:
+            c = extrair_contorno_tora(frame)
+            return (_mascara_do_contorno(frame.shape, c), c) if c is not None else (None, None)
+
+        colorido = sat_b >= max(limiar_s, 25)
+        # Madeira/casca: amarelo, laranja, marrom, vermelho-escuro (OpenCV H em 0..180)
+        tom_madeira = (hue <= 35) | (hue >= 165)
+        nao_preto = val >= 20
+
+        # Qual das duas classes de saturação é a tora? A que está no CENTRO do
+        # frame (a câmera aponta para a tora). Normalmente é a saturada
+        # (madeira creme sobre mesa cinza); mas madeira pálida sobre mesa
+        # marrom ou terra inverte -- e aí o fundo é que é "colorido".
+        cy0, cx0 = h // 2, w // 2
+        dy, dx = max(2, h // 20), max(2, w // 20)
+        centro_colorido = np.mean(colorido[cy0 - dy:cy0 + dy, cx0 - dx:cx0 + dx]) >= 0.5
+        if centro_colorido:
+            mask = colorido & tom_madeira & nao_preto
+        else:
+            mask = (~colorido) & nao_preto
+        mask = mask.astype(np.uint8) * 255
+
+
+        k_pequeno = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        k_grande = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (21, 21))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k_pequeno)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k_grande)
+
+        # Se "cor de madeira" cobre quase o frame inteiro, o fundo também é
+        # madeira/terra: a cor não separa nada -> Otsu de brilho.
+        if np.count_nonzero(mask) > 0.85 * h * w:
+            c = extrair_contorno_tora(frame)
+            return (_mascara_do_contorno(frame.shape, c), c) if c is not None else (None, None)
+
+        # Componente conectado que contém o centro (é para onde a câmera aponta);
+        # senão, o de centroide mais próximo do centro. Exige área >= 3% do frame.
+        n, rotulos, stats, centroides = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        if n <= 1:
+            return None, None
+        cx0, cy0 = w / 2.0, h / 2.0
+        area_min = 0.03 * h * w
+        escolhido = None
+        rotulo_centro = rotulos[int(cy0), int(cx0)]
+        if rotulo_centro > 0 and stats[rotulo_centro, cv2.CC_STAT_AREA] >= area_min:
+            escolhido = rotulo_centro
+        else:
+            melhor = None
+            for i in range(1, n):
+                if stats[i, cv2.CC_STAT_AREA] < area_min:
+                    continue
+                d = (centroides[i][0] - cx0) ** 2 + (centroides[i][1] - cy0) ** 2
+                if melhor is None or d < melhor[0]:
+                    melhor = (d, i)
+            if melhor is not None:
+                escolhido = melhor[1]
+        if escolhido is None:
+            return None, None
+
+        mask = (rotulos == escolhido).astype(np.uint8) * 255
+
+        # Preenche buracos internos (miolo claro cercado pela casca, nós escuros)
+        contornos, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contornos:
+            return None, None
+        contorno = max(contornos, key=cv2.contourArea)
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.drawContours(mask, [contorno], -1, 255, -1)
+        return mask, contorno
+    except Exception:
+        return None, None
+
+
+def classificar_vista(contorno) -> tuple[str, float, float, float]:
     """
-    if mascara_ou_contorno is None or len(mascara_ou_contorno) < 5:
+    Diz se a câmera está vendo a SEÇÃO (face cortada, rodela) ou a
+    LATERAL da tora, e devolve (vista, lado_menor_px, lado_maior_px, angulo).
+
+    Usa o retângulo de área mínima (rotacionado), então tora inclinada não
+    vira "mais larga". Razão lado_maior/lado_menor < 1.5 => seção (é
+    aproximadamente redonda); acima => lateral (alongada).
+
+    Importa porque os indicadores mudam de significado: numa seção mede-se
+    diâmetro e casca (anel); comprimento e tortuosidade só existem na
+    lateral. O sistema diz qual é qual em vez de inventar número.
+    """
+    # 3 pontos bastam: CHAIN_APPROX_SIMPLE reduz uma tora que atravessa o
+    # frame a um retângulo de 4 pontos — o caso mais comum na garra.
+    if contorno is None or len(contorno) < 3:
+        return "desconhecida", 0.0, 0.0, 0.0
+    (_, _), (a, b), ang = cv2.minAreaRect(np.asarray(contorno, dtype=np.float32).reshape(-1, 1, 2))
+    menor, maior = (a, b) if a <= b else (b, a)
+    if menor < 1:
+        return "desconhecida", 0.0, 0.0, 0.0
+    vista = "secao" if maior / menor < 1.5 else "lateral"
+    return vista, float(menor), float(maior), float(ang)
+
+
+def mascara_interior(mask: np.ndarray, fracao: float = 0.09) -> np.ndarray:
+    """Tora sem a faixa de borda (casca): erosão proporcional ao tamanho da peça."""
+    x, y, w, h = cv2.boundingRect(mask)
+    k = max(3, int(fracao * min(w, h)))
+    k += (k % 2 == 0)
+    return cv2.erode(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+
+
+# ------------------------------------------------------------
+# ESCALA AUTOMÁTICA — marcador ArUco de tamanho conhecido
+# ------------------------------------------------------------
+# Em máquina de verdade ninguém vai clicar em régua. A escala px->cm vem,
+# em ordem de preferência:
+#   1. do próprio harvester (o cabeçote já mede diâmetro/comprimento com
+#      sensores nas facas e no rolo — o dado sai no StanForD .hpr);
+#   2. de um MARCADOR de tamanho conhecido fixo no campo de visão (na
+#      garra ou na maquete): OpenCV detecta o ArUco em cada frame e
+#      calcula cm/px sozinho, inclusive se a câmera mudar de posição;
+#   3. de cm_por_px fixo no config (calibração de fábrica da montagem);
+#   4. da fórmula de GSD com óptica genérica (ordem de grandeza).
+# Gere o marcador com `python calibrar.py --gerar-marcador` e imprima.
+# ------------------------------------------------------------
+_ARUCO_DETECTOR = None
+
+
+def _detector_aruco():
+    global _ARUCO_DETECTOR
+    if _ARUCO_DETECTOR is None:
+        dicionario = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+        _ARUCO_DETECTOR = cv2.aruco.ArucoDetector(dicionario, cv2.aruco.DetectorParameters())
+    return _ARUCO_DETECTOR
+
+
+def escala_por_marcador(frame: np.ndarray, lado_marcador_cm: float) -> tuple[float | None, np.ndarray | None]:
+    """
+    Procura um marcador ArUco (DICT_4X4_50) no frame. Se achar, devolve
+    (cm_por_px, cantos) usando a média dos 4 lados em pixels; senão (None, None).
+    """
+    if not lado_marcador_cm or lado_marcador_cm <= 0:
+        return None, None
+    try:
+        cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        cantos, ids, _ = _detector_aruco().detectMarkers(cinza)
+        if ids is None or len(cantos) == 0:
+            return None, None
+        # Se houver mais de um, usa o maior (mais perto do plano da tora / mais confiável)
+        melhor = max(cantos, key=lambda c: cv2.contourArea(c.reshape(-1, 1, 2).astype(np.float32)))
+        pts = melhor.reshape(4, 2)
+        lados = [float(np.linalg.norm(pts[i] - pts[(i + 1) % 4])) for i in range(4)]
+        lado_px = float(np.mean(lados))
+        if lado_px < 8:
+            return None, None
+        return lado_marcador_cm / lado_px, pts.astype(np.int32)
+    except Exception:
+        return None, None
+
+
+# ------------------------------------------------------------
+# RACHADURA RADIAL NA SEÇÃO — detector clássico (complementa o YOLO)
+# ------------------------------------------------------------
+# O modelo foi treinado em madeira serrada: a classe "Crack" dele é
+# rachadura longitudinal em tábua aplainada. Rachadura RADIAL numa face
+# de corte (rodela) é outra imagem — e ele não a vê nem com confiança
+# 0.15. Até o fine-tuning com fotos de eucalipto, este detector cobre o
+# caso com visão clássica, que aqui é até mais adequada:
+#   1. black-hat morfológico realça estruturas finas MAIS ESCURAS que a
+#      vizinhança (rachadura, não anel de crescimento suave);
+#   2. fica só com o 1% mais forte, dentro do miolo (sem a casca);
+#   3. cada componente vira candidato se for LONGO (>= 12% do diâmetro),
+#      FINO (alongamento >= 6), RETO (resíduo do ajuste de reta pequeno)
+#      e a reta passar PERTO DO CENTRO — rachadura de secagem é radial;
+#      anel de crescimento é um arco tangencial, longe do centro e curvo.
+# Sai como defeito "Crack" (mesmo nome da classe do modelo), com
+# origem="opencv" para a tela distinguir.
+# ------------------------------------------------------------
+
+def detectar_rachaduras_secao(frame: np.ndarray, mask: np.ndarray) -> list:
+    try:
+        x, y, w, h = cv2.boundingRect(mask)
+        diam = float(max(w, h))
+        if diam < 40:
+            return []
+        m = cv2.moments(mask)
+        if m["m00"] <= 0:
+            return []
+        cx, cy = m["m10"] / m["m00"], m["m01"] / m["m00"]
+
+        cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        interior = mascara_interior(mask, 0.08)
+        k = max(7, int(0.05 * diam))
+        k += (k % 2 == 0)
+        relevo = cv2.morphologyEx(cinza, cv2.MORPH_BLACKHAT, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+        relevo[interior == 0] = 0
+        valores = relevo[interior > 0]
+        if valores.size < 500:
+            return []
+        limiar = max(18.0, float(np.percentile(valores, 99.0)))
+        binario = (relevo >= limiar).astype(np.uint8) * 255
+        binario = cv2.morphologyEx(binario, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+
+        area_frame = float(frame.shape[0] * frame.shape[1])
+        saida = []
+        contornos, _ = cv2.findContours(binario, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        for c in contornos:
+            if len(c) < 10:
+                continue
+            (_, _), (a, b), _ = cv2.minAreaRect(c)
+            comprimento, largura = max(a, b), max(1.0, min(a, b))
+            if comprimento < 0.12 * diam or comprimento / largura < 6.0:
+                continue
+            pts = c.reshape(-1, 2).astype(np.float32)
+            vx, vy, x0, y0 = cv2.fitLine(pts, cv2.DIST_L2, 0, 0.01, 0.01).flatten()
+            # resíduo do ajuste de reta (retidão) e distância do centro à reta
+            residuo = float(np.mean(np.abs((pts[:, 0] - x0) * vy - (pts[:, 1] - y0) * vx)))
+            dist_centro = abs((cx - x0) * vy - (cy - y0) * vx)
+            # Medido nas capturas: rachadura real residuo/L ~0.012, dist/diam ~0.02;
+            # arco de anel de crescimento residuo/L ~0.042, dist/diam ~0.22.
+            if residuo > 0.025 * comprimento or dist_centro > 0.12 * diam:
+                continue
+            bx, by, bw, bh = cv2.boundingRect(c)
+            extensao = min(1.0, comprimento / diam)
+            saida.append({
+                "tipo_defeito": "Crack",
+                "pos_x": float(bx), "pos_y": float(by),
+                "largura": float(bw), "altura": float(bh),
+                # área da LINHA, não da caixa: rachadura é fina, não "extensa"
+                "area_relativa": round(float(cv2.contourArea(c)) / area_frame, 4),
+                "confianca": round(0.55 + 0.4 * extensao, 4),
+                "origem": "opencv",
+            })
+        return saida
+    except Exception:
+        return []
+
+
+# ------------------------------------------------------------
+# ROI — recorte fixo do frame antes da inferência
+# ------------------------------------------------------------
+def roi_em_pixels(frame_shape: tuple, cfg: Config) -> tuple[int, int, int, int]:
+    """Converte a ROI do config (frações) para (x, y, w, h) em pixels do frame."""
+    h, w = frame_shape[:2]
+    if not cfg.roi:
+        return 0, 0, int(w), int(h)
+    rx, ry, rw, rh = cfg.roi
+    x = int(round(rx * w))
+    y = int(round(ry * h))
+    ww = max(1, int(round(rw * w)))
+    hh = max(1, int(round(rh * h)))
+    return x, y, min(ww, w - x), min(hh, h - y)
+
+
+def recortar_roi(frame: np.ndarray, cfg: Config) -> tuple[np.ndarray, tuple[int, int, int, int]]:
+    """Devolve (recorte, (x, y, w, h)). Sem ROI configurada, devolve o frame inteiro."""
+    x, y, w, h = roi_em_pixels(frame.shape, cfg)
+    if (x, y, w, h) == (0, 0, frame.shape[1], frame.shape[0]):
+        return frame, (x, y, w, h)
+    return frame[y:y + h, x:x + w], (x, y, w, h)
+
+
+def deslocar_defeitos(defeitos: list, dx: int, dy: int) -> list:
+    """Leva caixas medidas no recorte da ROI de volta às coordenadas do frame inteiro."""
+    if not dx and not dy:
+        return defeitos
+    return [
+        {**d, "pos_x": round(d["pos_x"] + dx, 2), "pos_y": round(d["pos_y"] + dy, 2)}
+        for d in defeitos
+    ]
+
+
+def calcular_tortuosidade(contorno, frame_shape: tuple | None = None) -> float:
+    """
+    Tortuosidade da tora em % — "flecha" máxima do EIXO da tora em relação
+    à corda que liga suas duas pontas, dividida pelo comprimento:
+
+        tortuosidade = (desvio máximo do eixo / comprimento) x 100
+
+    É a definição usada em campo na avaliação de fuste (flecha/comprimento):
+    0 = perfeitamente reta; 5 já é uma curvatura visível; > 10 é tora
+    torta de verdade. A Embrapa registra, por exemplo, que o clone GG100
+    tende a tortuosidade de fuste — é esse tipo de coisa que o índice deve
+    pegar.
+
+    Como o eixo é obtido: preenche o contorno, percorre a tora ao longo
+    do seu lado mais comprido e, em cada fatia transversal, marca o ponto
+    médio entre as duas bordas. Esses pontos médios formam a linha central
+    (eixo). Uma tora reta tem eixo reto; uma tora curva, eixo curvo.
+
+    A versão anterior media a distância dos pontos do CONTORNO ao eixo —
+    ou seja, media meio diâmetro, não curvatura: uma tora reta e grossa
+    saía com índice ~60. Foi substituída.
+    """
+    if contorno is None or len(contorno) < 3:
         return 0.0
 
     try:
-        pontos = mascara_ou_contorno.reshape(-1, 2).astype(np.float32)
-        vx, vy, x0, y0 = cv2.fitLine(pontos, cv2.DIST_L2, 0, 0.01, 0.01).flatten()
+        pts = np.asarray(contorno, dtype=np.int32).reshape(-1, 1, 2)
+        x, y, w, h = cv2.boundingRect(pts)
+        if w < 5 or h < 5:
+            return 0.0
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.drawContours(mask, [pts - np.array([x, y], dtype=np.int32)], -1, 255, -1)
 
-        direcao = np.array([vx, vy])
-        origem = np.array([x0, y0])
+        # Percorre ao longo do lado mais comprido; transpõe se a tora
+        # estiver "deitada" para o código ser um só.
+        if w > h:
+            mask = mask.T
+        comprimento = mask.shape[0]
 
-        desvios = []
-        for p in pontos:
-            vetor = p - origem
-            proj = np.dot(vetor, direcao) * direcao
-            perpendicular = vetor - proj
-            desvios.append(np.linalg.norm(perpendicular))
+        eixo = []
+        for i in range(comprimento):
+            cols = np.flatnonzero(mask[i])
+            if cols.size:
+                eixo.append((i, (cols[0] + cols[-1]) / 2.0))
+        if len(eixo) < 10:
+            return 0.0
 
-        extensao = pontos.max(axis=0) - pontos.min(axis=0)
-        comprimento = max(float(np.linalg.norm(extensao)), 1.0)
-        indice = (max(desvios) / comprimento) * 100.0
-        return round(float(min(indice, 100.0)), 2)
+        eixo_arr = np.asarray(eixo, dtype=np.float64)
+        # Ignora 5% de cada ponta: as extremidades do contorno (corte da
+        # tora, garra) distorcem o ponto médio sem serem curvatura.
+        corte = max(1, int(0.05 * len(eixo_arr)))
+        eixo_arr = eixo_arr[corte:-corte] if len(eixo_arr) > 2 * corte + 10 else eixo_arr
+
+        p0, p1 = eixo_arr[0], eixo_arr[-1]
+        corda = p1 - p0
+        norma = float(np.hypot(*corda))
+        if norma < 1.0:
+            return 0.0
+        # Distância perpendicular de cada ponto do eixo à corda p0->p1
+        desvios = np.abs((eixo_arr[:, 0] - p0[0]) * corda[1] - (eixo_arr[:, 1] - p0[1]) * corda[0]) / norma
+        indice = float(desvios.max()) / norma * 100.0
+        return round(min(indice, 100.0), 2)
     except Exception:
         return 0.0
 
@@ -696,11 +1293,358 @@ def salvar_inspecao(
 
 
 # ============================================================
+# PIPELINE DE ANÁLISE DE UM FRAME
+# ============================================================
+# Tudo o que acontece entre "chegou um frame" e "temos status +
+# indicadores" vive aqui, numa função pura (sem thread, sem banco, sem
+# janela). O loop ao vivo (main) e o simulador sem câmera
+# (tests/simular_cenario.py) chamam a MESMA função -- o que a demo mostra
+# é exatamente o que o teste testa.
+# ============================================================
+
+CORES_STATUS = {"aprovado": (0, 255, 0), "quarentena": (0, 255, 255), "reprovado": (0, 0, 255)}
+COR_IGNORADO = (140, 140, 140)
+
+
+def carregar_modelo(cfg: Config) -> YOLO:
+    """Mesma ordem de busca em todo lugar: modelo_path > OpenVINO INT8 > OpenVINO FP32 > NCNN > .pt treinado > yolov8n genérico."""
+    caminho_modelo = None
+    candidatos = [
+        Path(cfg.modelo_path),
+        Path("./models/wood_best_int8_openvino_model"),
+        Path("./models/wood_best_openvino_model"),
+        Path(cfg.modelo_ncnn_path),
+        Path("./models/wood_best.pt"),
+        Path("./yolov8n.pt"),
+    ]
+    for p in candidatos:
+        if p.exists():
+            caminho_modelo = str(p)
+            break
+    if caminho_modelo is None:
+        caminho_modelo = "yolov8n.pt"
+        print("⚠️  Nenhum modelo treinado encontrado em models/ — usando yolov8n.pt genérico (NÃO detecta defeito de madeira).")
+    elif caminho_modelo.endswith(".pt"):
+        print("ℹ️  Rodando o .pt direto no PyTorch (lento em CPU). Rode `python exportar_modelo.py` para gerar a versão OpenVINO (~5x mais rápida).")
+    modelo = YOLO(caminho_modelo, task="detect")
+    print(f"✅ Modelo carregado ({caminho_modelo})")
+    return modelo
+
+
+def detectar_yolo(recorte: np.ndarray, modelo: YOLO, cfg: Config) -> list:
+    """Roda o modelo no recorte PRÉ-PROCESSADO (grayscale + CLAHE, igual ao treino) e devolve os defeitos brutos, em coordenadas do recorte."""
+    resultados = modelo.predict(
+        source=preprocessar_para_modelo(recorte),
+        conf=cfg.conf_threshold,
+        iou=cfg.iou_threshold,
+        imgsz=cfg.imgsz,
+        device="cpu",
+        verbose=False,
+    )
+    return extrair_defeitos_yolo(resultados[0], cfg, recorte.shape)
+
+
+def analisar_frame(
+    frame: np.ndarray,
+    modelo: "YOLO | None",
+    cfg: Config,
+    persistencia: "FiltroPersistencia | None" = None,
+    defeitos_yolo: "list | None" = None,
+    yolo_novo: bool = True,
+) -> dict:
+    """
+    Executa o pipeline completo num frame BGR e devolve um dicionário com:
+      status, confianca_saude, defeitos (filtrados, coords do frame inteiro),
+      descartados (o que o modelo viu mas os filtros removeram), indicadores
+      (prontos para salvar_inspecao), contorno, roi (x, y, w, h) e hud.
+
+    Duas formas de uso:
+      - `modelo` dado: roda o YOLO aqui mesmo (simulador, testes offline).
+      - `defeitos_yolo` dado (coords do recorte da ROI): reaproveita um
+        resultado do YOLO calculado em outra thread. É assim que o loop ao
+        vivo mantém a parte clássica (~70 ms) a ~10 fps enquanto o modelo
+        (~0,5-2 s em CPU) roda no ritmo dele. `yolo_novo=False` avisa que
+        são as mesmas caixas da chamada anterior, para o filtro de
+        persistência não contar o mesmo resultado duas vezes.
+    """
+    # --- 1. ROI: a câmera é fixa, a tora sempre aparece na mesma região ---
+    recorte, (rx, ry, rw, rh) = recortar_roi(frame, cfg)
+
+    # --- 2. Defeitos do modelo (no recorte pré-processado) ---
+    # As medições por OpenCV mais abaixo usam o recorte COLORIDO original:
+    # contorno e porcentagem de casca funcionam melhor com cor.
+    if defeitos_yolo is None:
+        if modelo is None:
+            raise ValueError("analisar_frame precisa de `modelo` ou de `defeitos_yolo`.")
+        defeitos_yolo = detectar_yolo(recorte, modelo, cfg)
+    defeitos_brutos = list(defeitos_yolo)
+
+    # --- 3. Segmentação da tora (dentro da ROI) ---
+    # Precisa vir ANTES dos filtros: é o que permite descartar detecção
+    # fora da madeira. Por cor (madeira x fundo), com Otsu de brilho como reserva.
+    mask, contorno = segmentar_tora(recorte)
+    interior = mascara_interior(mask) if mask is not None else None
+    vista, lado_menor_px, lado_maior_px, _ = classificar_vista(contorno)
+
+    # Rachadura radial na face de corte: o modelo não cobre; visão clássica cobre.
+    if vista == "secao" and mask is not None:
+        defeitos_brutos = defeitos_brutos + detectar_rachaduras_secao(recorte, mask)
+
+    # --- 4. Filtros de inferência, em cascata, do mais barato ao mais caro ---
+    defeitos = defeitos_brutos
+    if cfg.filtro_area_minima > 0:
+        defeitos = filtrar_por_area_minima(defeitos, cfg.filtro_area_minima)
+    if cfg.filtro_dentro_contorno:
+        defeitos = filtrar_dentro_do_contorno(defeitos, contorno, mascara_interior=interior)
+    if persistencia is not None and cfg.filtro_persistencia > 1:
+        # Persistência só se aplica ao YOLO (é ele que "pisca"); a rachadura
+        # por visão clássica é determinística no frame. E só avança o
+        # histórico quando há resultado NOVO do modelo.
+        so_yolo = [d for d in defeitos if d.get("origem") != "opencv"]
+        so_cv = [d for d in defeitos if d.get("origem") == "opencv"]
+        if yolo_novo:
+            so_yolo = persistencia.filtrar(so_yolo)
+        else:
+            so_yolo = persistencia.ultimo_confirmado(so_yolo)
+        defeitos = so_yolo + so_cv
+
+    mantidos_ids = {id(d) for d in defeitos}
+    descartados = [d for d in defeitos_brutos if id(d) not in mantidos_ids]
+
+    # --- 5. Saúde da tora, ponderada pela GRAVIDADE de cada defeito ---
+    confianca_saude = calcular_confianca_saude(defeitos)
+
+    # --- 6. Escala px -> cm: marcador ArUco (automático) > config > GSD ---
+    cm_por_px, marcador = escala_por_marcador(frame, cfg.marcador_aruco_cm)
+    if cm_por_px is not None:
+        metodo_escala = "marcador_aruco"
+    else:
+        cm_por_px = calcular_cm_por_px(cfg, frame.shape[1])
+        metodo_escala = "montagem_calibrada" if cfg.cm_por_px and cfg.cm_por_px > 0 else "gsd_optica_generica"
+
+    # --- 7. Geometria conforme a VISTA ---
+    # Seção (rodela): diâmetro pela área (robusto a borda irregular);
+    # comprimento não é visível -> usa o comprimento de traçamento do talhão.
+    # Lateral: lado menor = diâmetro, lado maior = comprimento visível;
+    # tortuosidade só faz sentido aqui.
+    comprimento_medido = False
+    if vista == "secao" and mask is not None:
+        area_px = float(np.count_nonzero(mask))
+        diametro_cm = calcular_dimensao_real_cm((4.0 * area_px / np.pi) ** 0.5, cm_por_px)
+        comprimento_cm = float(cfg.comprimento_corte_cm)
+        tortuosidade = 0.0
+    elif vista == "lateral":
+        diametro_cm = calcular_dimensao_real_cm(lado_menor_px, cm_por_px)
+        comprimento_cm = calcular_dimensao_real_cm(lado_maior_px, cm_por_px)
+        comprimento_medido = True
+        tortuosidade = calcular_tortuosidade(contorno)
+    else:
+        # Nada segmentado: usa a ROI como estimativa grosseira e sinaliza.
+        diametro_cm = calcular_dimensao_real_cm(min(rw, rh), cm_por_px)
+        comprimento_cm = float(cfg.comprimento_corte_cm)
+        tortuosidade = 0.0
+
+    densidade = calcular_densidade_estimada(cfg.clone_id)
+    porcentagem_casca = calcular_porcentagem_casca(recorte, contorno)
+    volume_util_m3 = calcular_volume_m3(diametro_cm, comprimento_cm, confianca_saude)
+    massa_seca_kg = calcular_massa_seca_kg(volume_util_m3, densidade)
+
+    status = classificar_qualidade(confianca_saude, defeitos, cfg)
+
+    metodo_diam = f"imagem_{vista}_{metodo_escala}"
+    metodo_compr = f"imagem_lateral_{metodo_escala}" if comprimento_medido else "comprimento_tracamento_config"
+    metodo_tort = "opencv_eixo_flecha" if vista == "lateral" else "nao_aplicavel_secao"
+    indicadores = {
+        "densidade": {"valor": densidade, "unidade": "kg/m3", "metodo": f"lookup_clone_{cfg.clone_id}"},
+        "altura": {"valor": comprimento_cm, "unidade": "cm", "metodo": metodo_compr},
+        "diametro": {"valor": diametro_cm, "unidade": "cm", "metodo": metodo_diam},
+        "tortuosidade": {"valor": tortuosidade, "unidade": "indice", "metodo": metodo_tort},
+        "porcentagem_casca": {"valor": porcentagem_casca, "unidade": "%", "metodo": "opencv_otsu_casca_residual"},
+        "volume_util": {"valor": volume_util_m3, "unidade": "m3", "metodo": "cilindro_" + ("medido" if comprimento_medido else "diam_medido_compr_config")},
+        "massa_seca": {"valor": massa_seca_kg, "unidade": "kg", "metodo": f"volume_x_densidade_clone_{cfg.clone_id}"},
+        "apodrecimento_pragas": {"valor": round(confianca_saude * 100, 2), "unidade": "%", "metodo": "yolo_severidade"},
+    }
+
+    # Coordenadas de volta ao frame inteiro (é assim que vão para o banco e
+    # para a tela — a ROI é detalhe de implementação, não do dado).
+    defeitos = deslocar_defeitos(defeitos, rx, ry)
+    descartados = deslocar_defeitos(descartados, rx, ry)
+    contorno_frame = None
+    if contorno is not None:
+        contorno_frame = np.asarray(contorno, dtype=np.int32).reshape(-1, 1, 2) + np.array([rx, ry], dtype=np.int32)
+
+    rotulo_vista = {"secao": "Secao", "lateral": "Lateral", "desconhecida": "Sem tora"}[vista]
+    compr_txt = f"Compr {comprimento_cm:.0f}cm" + ("" if comprimento_medido else "*")
+    tort_txt = f"Tort {tortuosidade:.1f}%" if vista == "lateral" else "Tort n/a"
+    hud = [
+        f"Status: {status.upper()} | Clone: {cfg.clone_id}",
+        f"Saude {confianca_saude:.0%} | Casca {porcentagem_casca:.1f}% | Defeitos {len(defeitos)}"
+        + (f" (+{len(descartados)} ign.)" if descartados else ""),
+        f"{rotulo_vista} | Diam {diametro_cm:.1f}cm | {compr_txt} | Dens {densidade:.0f}kg/m3 | {tort_txt}",
+        f"Escala: {metodo_escala} ({cm_por_px * 10:.2f} mm/px)" + ("" if comprimento_medido else "  *comprimento de tracamento"),
+    ]
+
+    return {
+        "status": status,
+        "confianca_saude": confianca_saude,
+        "defeitos": defeitos,
+        "descartados": descartados,
+        "indicadores": indicadores,
+        "contorno": contorno_frame,
+        "roi": (rx, ry, rw, rh),
+        "vista": vista,
+        "marcador": marcador,
+        "hud": hud,
+    }
+
+
+def resumir_analise(uuid_gerado: str, cfg: Config, a: dict) -> str:
+    """Linha de log de uma inspeção gravada — o que o operador (e a banca) lê no console."""
+    ind = a["indicadores"]
+    if a["defeitos"]:
+        pior = max(a["defeitos"], key=lambda d: d["confianca"] * severidade_do_defeito(d["tipo_defeito"]))
+        resumo_defeito = f"pior={pior['tipo_defeito']}({pior['confianca']:.2f})"
+    else:
+        resumo_defeito = "sem defeito"
+    emoji = {"aprovado": "✅", "quarentena": "⚠️", "reprovado": "❌"}[a["status"]]
+    return (
+        f"{emoji} [{uuid_gerado[:8]}] Clone={cfg.clone_id} status={a['status']} "
+        f"saúde={a['confianca_saude']:.2%} compr={ind['altura']['valor']}cm diam={ind['diametro']['valor']}cm "
+        f"densidade={ind['densidade']['valor']}kg/m3 tortuosidade={ind['tortuosidade']['valor']} "
+        f"casca={ind['porcentagem_casca']['valor']}% volume={ind['volume_util']['valor']}m3 "
+        f"massa={ind['massa_seca']['valor']}kg defeitos={len(a['defeitos'])} {resumo_defeito}"
+        + (f" [ignorados={len(a['descartados'])}]" if a["descartados"] else "")
+    )
+
+
+def desenhar_analise(frame: np.ndarray, a: dict | None) -> np.ndarray:
+    """
+    Desenha o resultado sobre uma cópia do frame. Caixas MANTIDAS na cor do
+    status; caixas IGNORADAS pelos filtros em cinza fino, com o motivo
+    visível -- na demo isso mostra que o sistema viu o teclado/a mão e
+    decidiu, de propósito, não contar.
+    """
+    vis = frame.copy()
+    fonte = cv2.FONT_HERSHEY_SIMPLEX
+    if a is None:
+        cv2.putText(vis, "Analisando...", (20, 40), fonte, 0.9, (255, 255, 255), 2)
+        return vis
+
+    cor = CORES_STATUS[a["status"]]
+    rx, ry, rw, rh = a["roi"]
+    if (rw, rh) != (frame.shape[1], frame.shape[0]):
+        cv2.rectangle(vis, (rx, ry), (rx + rw, ry + rh), (255, 200, 0), 1)
+        cv2.putText(vis, "ROI", (rx + 4, ry + 16), fonte, 0.5, (255, 200, 0), 1)
+    if a["contorno"] is not None and len(a["contorno"]) >= 3:
+        cv2.drawContours(vis, [a["contorno"]], -1, (255, 255, 255), 1)
+    if a.get("marcador") is not None:
+        cv2.polylines(vis, [a["marcador"].reshape(-1, 1, 2)], True, (255, 0, 255), 2)
+        mx, my = a["marcador"][0]
+        cv2.putText(vis, "escala", (int(mx), max(15, int(my) - 6)), fonte, 0.5, (255, 0, 255), 1)
+
+    for d in a["descartados"]:
+        x1, y1 = int(d["pos_x"]), int(d["pos_y"])
+        x2, y2 = int(d["pos_x"] + d["largura"]), int(d["pos_y"] + d["altura"])
+        cv2.rectangle(vis, (x1, y1), (x2, y2), COR_IGNORADO, 1)
+        cv2.putText(vis, f"{d['tipo_defeito']} {d['confianca']:.2f} (ignorado)", (x1, max(15, y1 - 6)), fonte, 0.45, COR_IGNORADO, 1)
+    for d in a["defeitos"]:
+        x1, y1 = int(d["pos_x"]), int(d["pos_y"])
+        x2, y2 = int(d["pos_x"] + d["largura"]), int(d["pos_y"] + d["altura"])
+        cv2.rectangle(vis, (x1, y1), (x2, y2), cor, 2)
+        rotulo = f"{d['tipo_defeito']} {d['confianca']:.2f}" + (" (cv)" if d.get("origem") == "opencv" else "")
+        cv2.putText(vis, rotulo, (x1, max(15, y1 - 6)), fonte, 0.5, (0, 0, 0), 2, cv2.LINE_AA)
+        cv2.putText(vis, rotulo, (x1, max(15, y1 - 6)), fonte, 0.5, cor, 1, cv2.LINE_AA)
+
+    # HUD sobre uma faixa escura semitransparente: legível sobre mesa clara e
+    # sobre madeira. Fonte proporcional à largura do frame (webcam 640 px x
+    # câmera industrial 1920 px).
+    fator = max(0.75, min(1.0, frame.shape[1] / 1280.0))
+    escalas = [0.85 * fator, 0.62 * fator, 0.52 * fator, 0.48 * fator]
+    passos = [int(34 * fator), int(26 * fator), int(24 * fator), int(24 * fator)]
+    altura_faixa = 8 + sum(passos[: len(a["hud"])])
+    faixa = vis.copy()
+    cv2.rectangle(faixa, (0, 0), (frame.shape[1], altura_faixa), (0, 0, 0), -1)
+    cv2.addWeighted(faixa, 0.55, vis, 0.45, 0, vis)
+    y = 4
+    for i, linha in enumerate(a["hud"]):
+        y += passos[i] - 6
+        cor_txt = cor if i == 0 else (255, 255, 255)
+        cv2.putText(vis, linha, (12, y), fonte, escalas[i], cor_txt, 2 if i <= 1 else 1, cv2.LINE_AA)
+        y += 6
+    return vis
+
+
+# ============================================================
+# FONTES DE VÍDEO — câmera, arquivo de vídeo ou pasta de imagens
+# ============================================================
+# `--fonte` aceita as três. As duas últimas existem para (a) testar sem a
+# tora física em mãos e (b) ter um PLANO B na apresentação: se a webcam
+# falhar no palco, `--fonte demo.mp4` roda o pipeline inteiro, de
+# verdade, sobre um vídeo gravado -- não é tela mocada, é o mesmo código.
+# ============================================================
+
+class FonteImagens:
+    """Emula cv2.VideoCapture sobre uma pasta de imagens, em loop, segurando cada uma por alguns segundos."""
+
+    EXTENSOES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+    def __init__(self, pasta: Path, segundos_por_imagem: float = 3.0):
+        self.arquivos = sorted(p for p in pasta.iterdir() if p.suffix.lower() in self.EXTENSOES)
+        self.segundos = segundos_por_imagem
+        self.inicio = time.monotonic()
+
+    def isOpened(self) -> bool:
+        return bool(self.arquivos)
+
+    def read(self):
+        if not self.arquivos:
+            return False, None
+        i = int((time.monotonic() - self.inicio) / self.segundos) % len(self.arquivos)
+        frame = cv2.imread(str(self.arquivos[i]))
+        time.sleep(0.03)  # ~30 fps de "vídeo" parado, sem fritar a CPU
+        return frame is not None, frame
+
+    def set(self, *_):
+        return True
+
+    def release(self):
+        pass
+
+
+def abrir_fonte(fonte: str | None, cfg: Config):
+    """Abre a câmera do config, um índice de câmera, um arquivo de vídeo ou uma pasta de imagens."""
+    if fonte is None or fonte.strip() == "":
+        fonte = str(cfg.camera_index)
+
+    caminho = Path(fonte)
+    if caminho.is_dir():
+        print(f"🖼️  Fonte: pasta de imagens {caminho} (loop)")
+        return FonteImagens(caminho)
+    if caminho.is_file():
+        print(f"🎞️  Fonte: vídeo {caminho}")
+        return cv2.VideoCapture(str(caminho))
+
+    indice = int(fonte)
+    print(f"📷 Abrindo câmera (índice {indice})...")
+    if sys.platform == "win32":
+        # No Windows, o backend padrão do OpenCV às vezes demora ou falha
+        # pra abrir a webcam. DirectShow é mais rápido e confiável lá.
+        captura = cv2.VideoCapture(indice, cv2.CAP_DSHOW)
+    else:
+        captura = cv2.VideoCapture(indice)
+    # Buffer de 1 frame: por padrão o OpenCV enfileira frames e o read()
+    # devolve os ANTIGOS quando o processamento não acompanha — é isso que dá
+    # a sensação de atraso. Com buffer 1, sempre pegamos o frame mais recente.
+    captura.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    return captura
+
+
+# ============================================================
 # LOOP PRINCIPAL
 # ============================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="IA de Qualidade da Madeira — Raspberry Pi")
+    parser = argparse.ArgumentParser(description="IA de Qualidade da Madeira — máquina de campo")
     parser.add_argument(
         "--simulado", action="store_true",
         help="Abre a janela com bounding boxes (mesmo efeito de --gui, mantido por compatibilidade)"
@@ -708,6 +1652,10 @@ def main():
     parser.add_argument(
         "--gui", action="store_true",
         help="Abre janela gráfica exibindo as bounding boxes da câmera ao vivo"
+    )
+    parser.add_argument(
+        "--fonte", type=str, default=None,
+        help="Índice de câmera, arquivo de vídeo ou pasta de imagens. Padrão: camera_index do config.json"
     )
     parser.add_argument(
         "--config-file", type=str, default="./config.json",
@@ -730,172 +1678,110 @@ def main():
         cfg.idade_talhao_anos = args.idade
 
     print("📦 Carregando modelo IA...")
-    caminho_modelo = None
-    for p in [Path(cfg.modelo_ncnn_path), Path("./models/wood_best.pt"), Path("./models/wood_ncnn_model"), Path("./yolov8n.pt")]:
-        if p.exists():
-            caminho_modelo = str(p)
-            break
-    if caminho_modelo is None:
-        caminho_modelo = "yolov8n.pt"
+    modelo = carregar_modelo(cfg)
 
-    modelo = YOLO(caminho_modelo, task="detect")
-    print(f"✅ Modelo carregado com sucesso ({caminho_modelo})!")
-
-    print(f"📷 Abrindo câmera (índice {cfg.camera_index})...")
-    if sys.platform == "win32":
-        # No Windows, o backend padrão do OpenCV às vezes demora ou falha
-        # pra abrir a webcam. DirectShow é mais rápido e confiável lá.
-        captura = cv2.VideoCapture(cfg.camera_index, cv2.CAP_DSHOW)
-    else:
-        captura = cv2.VideoCapture(cfg.camera_index)
+    captura = abrir_fonte(args.fonte, cfg)
     if not captura.isOpened():
-        raise RuntimeError("Não foi possível abrir a câmera.")
+        raise RuntimeError(f"Não foi possível abrir a fonte de vídeo ({args.fonte or cfg.camera_index}).")
+    fonte_e_video = bool(args.fonte) and Path(args.fonte).is_file()
 
-    # Buffer de 1 frame: por padrão o OpenCV enfileira frames e o read()
-    # devolve os ANTIGOS quando o processamento não acompanha — é isso que dá
-    # a sensação de atraso. Com buffer 1, sempre pegamos o frame mais recente.
-    captura.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    # Sem cm_por_px calibrado, avisa uma vez: as medidas em cm são só ordem de grandeza.
+    if not (cfg.cm_por_px and cfg.cm_por_px > 0):
+        print("ℹ️  'cm_por_px' não calibrado no config.json — diâmetro/comprimento usam a fórmula de GSD com óptica genérica de webcam (ordem de grandeza).")
+    if cfg.roi:
+        print(f"🎯 ROI ativa: {cfg.roi} (fração do frame). Detecções fora dela são ignoradas.")
 
     # ------------------------------------------------------------------
     # Arquitetura em tempo real (a imagem nunca congela):
     #   - Thread PRINCIPAL: só captura e exibe o vídeo (roda a ~FPS da
     #     câmera, sempre fluido).
-    #   - Thread de TRABALHO: roda o YOLO no frame mais recente e devolve as
-    #     caixas/HUD para a principal desenhar. A inferência pesada nunca
+    #   - Thread de TRABALHO: roda o pipeline no frame mais recente e devolve
+    #     a análise para a principal desenhar. A inferência pesada nunca
     #     bloqueia o vídeo — no máximo as caixas atualizam um pouco atrás.
     # ------------------------------------------------------------------
-    estado = {"frame": None, "boxes": [], "hud": [], "cor": (0, 255, 0)}
+    # Três threads:
+    #   - PRINCIPAL: captura e exibe (fps da câmera).
+    #   - YOLO: roda o modelo no frame mais recente, no ritmo que a CPU der
+    #     (~0,5 s com OpenVINO, ~2,5 s com .pt a 1024). Publica as caixas.
+    #   - ANÁLISE: visão clássica (~70 ms: contorno, casca, diâmetro,
+    #     rachadura, status) a ~10 fps, reaproveitando as últimas caixas do
+    #     YOLO. É o que faz a tela responder na hora; só os nós do modelo
+    #     atualizam com atraso.
+    estado = {"frame": None, "analise": None, "yolo": None, "yolo_id": 0}
     lock = threading.Lock()
     parar = threading.Event()
+
+    def worker_yolo():
+        while not parar.is_set():
+            with lock:
+                frame = None if estado["frame"] is None else estado["frame"].copy()
+            if frame is None:
+                time.sleep(0.01)
+                continue
+            try:
+                recorte, _ = recortar_roi(frame, cfg)
+                defeitos = detectar_yolo(recorte, modelo, cfg)
+                with lock:
+                    estado["yolo"] = defeitos
+                    estado["yolo_id"] += 1
+            except Exception as e:
+                print(f"⚠️  Erro no modelo (seguindo em frente): {e}")
+                time.sleep(0.05)
 
     def worker_analise():
         # A conexão SQLite é criada AQUI: objetos sqlite3 só podem ser usados
         # na mesma thread em que foram criados.
         conexao = conectar_banco(cfg)
         ultima_gravacao = 0.0
+        ultimo_yolo_id = -1
+        # O filtro de persistência guarda estado entre análises, então
+        # precisa viver fora do loop.
+        persistencia = FiltroPersistencia(min_ocorrencias=max(1, cfg.filtro_persistencia))
         try:
             while not parar.is_set():
                 with lock:
                     frame = None if estado["frame"] is None else estado["frame"].copy()
-                if frame is None:
+                    defeitos_yolo = estado["yolo"]
+                    yolo_id = estado["yolo_id"]
+                if frame is None or defeitos_yolo is None:
                     time.sleep(0.01)
                     continue
                 try:
-                    # --- 1. Roda o YOLO no frame mais recente ---
-                    # O modelo recebe o frame PRÉ-PROCESSADO (grayscale + CLAHE),
-                    # igual ao treino. As medições por OpenCV mais abaixo continuam
-                    # usando o frame COLORIDO original -- contorno e porcentagem de
-                    # casca funcionam melhor com a informação de cor preservada.
-                    frame_modelo = preprocessar_para_modelo(frame)
-
-                    resultados = modelo.predict(
-                        source=frame_modelo,
-                        conf=cfg.conf_threshold,
-                        iou=cfg.iou_threshold,
-                        imgsz=cfg.imgsz,
-                        device="cpu",
-                        verbose=False,
+                    a = analisar_frame(
+                        frame, None, cfg, persistencia,
+                        defeitos_yolo=defeitos_yolo, yolo_novo=(yolo_id != ultimo_yolo_id),
                     )
-                    resultado = resultados[0]
-                    defeitos = extrair_defeitos_yolo(resultado, cfg, frame.shape)
-
-                    # Saúde da tora, ponderada pela GRAVIDADE de cada defeito
-                    # (ver calcular_confianca_saude / PESO_SEVERIDADE).
-                    confianca_saude = calcular_confianca_saude(defeitos)
-
-                    # --- 2. Distância câmera-tora: fixa e calibrada, sem sensor ---
-                    distancia_cm = cfg.distancia_camera_tora_cm
-
-                    # --- 3. Extrai contorno da tora e calcula indicadores ---
-                    contorno_tora = None
-                    if resultado.masks is not None and len(resultado.masks.xy) > 0:
-                        contorno_tora = max(resultado.masks.xy, key=len)
-                    else:
-                        contorno_tora = extrair_contorno_tora(frame)
-
-                    if contorno_tora is not None and len(contorno_tora) > 0:
-                        _, _, w_box, h_box = cv2.boundingRect(contorno_tora)
-                        largura_px = float(w_box)
-                        altura_px = float(h_box)
-                    else:
-                        largura_px = float(frame.shape[1] * 0.2)
-                        altura_px = float(frame.shape[0] * 0.7)
-
-                    altura_cm = calcular_dimensao_real_cm(altura_px, distancia_cm, cfg)
-                    diametro_cm = calcular_dimensao_real_cm(largura_px, distancia_cm, cfg)
-                    densidade = calcular_densidade_estimada(cfg.clone_id)
-                    tortuosidade = calcular_tortuosidade(contorno_tora)
-                    porcentagem_casca = calcular_porcentagem_casca(frame, contorno_tora)
-                    volume_util_m3 = calcular_volume_m3(diametro_cm, altura_cm, confianca_saude)
-                    massa_seca_kg = calcular_massa_seca_kg(volume_util_m3, densidade)
-
-                    status = classificar_qualidade(confianca_saude, defeitos, cfg)
-                    cor = {"aprovado": (0, 255, 0), "quarentena": (0, 255, 255), "reprovado": (0, 0, 255)}[status]
-
-                    # Caixas + HUD para a thread principal desenhar no vídeo ao vivo
-                    boxes = []
-                    for box in resultado.boxes:
-                        x1, y1, x2, y2 = box.xyxy[0].tolist()
-                        classe = resultado.names.get(int(box.cls[0]), "?")
-                        conf = float(box.conf[0])
-                        boxes.append((int(x1), int(y1), int(x2), int(y2), f"{classe} {conf:.2f}"))
-                    hud = [
-                        f"Status: {status.upper()} | Clone: {cfg.clone_id}",
-                        f"Saude: {confianca_saude:.1%} | Casca: {porcentagem_casca:.1f}%",
-                        f"Altura: {altura_cm:.1f}cm | Densidade: {densidade:.0f}kg/m3 | Tortuos: {tortuosidade:.1f}",
-                    ]
+                    ultimo_yolo_id = yolo_id
                     with lock:
-                        estado["boxes"] = boxes
-                        estado["hud"] = hud
-                        estado["cor"] = cor
+                        estado["analise"] = a
 
-                    # --- 4. Grava no banco no máximo uma vez por intervalo ---
-                    # (a inferência para exibição roda mais rápido que isso).
+                    # Grava no banco no máximo uma vez por intervalo
                     agora = time.monotonic()
                     if agora - ultima_gravacao >= cfg.intervalo_captura_seg:
                         ultima_gravacao = agora
-                        indicadores = {
-                            "densidade": {"valor": densidade, "unidade": "kg/m3", "metodo": f"lit_hibrido_grandis_urophylla_{cfg.clone_id}"},
-                            "altura": {"valor": altura_cm, "unidade": "cm", "metodo": "imagem_gsd_ultrassom"},
-                            "diametro": {"valor": diametro_cm, "unidade": "cm", "metodo": "imagem_gsd_ultrassom"},
-                            "tortuosidade": {"valor": tortuosidade, "unidade": "indice", "metodo": "opencv_contorno"},
-                            "porcentagem_casca": {"valor": porcentagem_casca, "unidade": "%", "metodo": "opencv_textura_hsv"},
-                            "volume_util": {"valor": volume_util_m3, "unidade": "m3", "metodo": "geometria_medida"},
-                            "massa_seca": {"valor": massa_seca_kg, "unidade": "kg", "metodo": f"volume_x_densidade_est_{cfg.clone_id}"},
-                            "apodrecimento_pragas": {"valor": round(confianca_saude * 100, 2), "unidade": "%", "metodo": "yolo"},
-                        }
-                        uuid_gerado = salvar_inspecao(conexao, cfg, indicadores, defeitos, status, confianca_saude)
-
-                        # Defeito que mais pesou na decisão — útil pra explicar o
-                        # resultado ao operador (e ao avaliador, na demonstração)
-                        if defeitos:
-                            pior = max(defeitos, key=lambda d: d["confianca"] * severidade_do_defeito(d["tipo_defeito"]))
-                            resumo_defeito = f"pior={pior['tipo_defeito']}({pior['confianca']:.2f})"
-                        else:
-                            resumo_defeito = "sem defeito"
-
-                        emoji_status = {"aprovado": "✅", "quarentena": "⚠️", "reprovado": "❌"}[status]
-                        print(
-                            f"{emoji_status} [{uuid_gerado[:8]}] Clone={cfg.clone_id} status={status} "
-                            f"saúde={confianca_saude:.2%} altura={altura_cm}cm diametro={diametro_cm}cm "
-                            f"densidade={densidade}kg/m3 tortuosidade={tortuosidade} casca={porcentagem_casca}% "
-                            f"volume={volume_util_m3}m3 massa={massa_seca_kg}kg "
-                            f"defeitos={len(defeitos)} {resumo_defeito}"
+                        uuid_gerado = salvar_inspecao(
+                            conexao, cfg, a["indicadores"], a["defeitos"], a["status"], a["confianca_saude"]
                         )
+                        print(resumir_analise(uuid_gerado, cfg, a))
                 except Exception as e:
                     print(f"⚠️  Erro na análise (seguindo em frente): {e}")
                     time.sleep(0.05)
+                time.sleep(0.03)  # ~10 fps é mais que suficiente para a parte clássica
         finally:
             conexao.close()
 
-    thread = threading.Thread(target=worker_analise, daemon=True)
-    thread.start()
+    threads = [
+        threading.Thread(target=worker_yolo, daemon=True),
+        threading.Thread(target=worker_analise, daemon=True),
+    ]
+    for t in threads:
+        t.start()
 
     mostrar = args.simulado or args.gui
-    fonte = cv2.FONT_HERSHEY_SIMPLEX
+    pasta_capturas = Path("./capturas")
     print(
         "🚀 Rodando em tempo real. "
-        + ("Tecle 'q' na janela ou " if mostrar else "")
+        + ("Tecle 'q' na janela para sair, 's' para salvar o frame em capturas/, ou " if mostrar else "")
         + "Ctrl+C para parar.\n"
     )
 
@@ -903,6 +1789,10 @@ def main():
         while not parar.is_set():
             sucesso, frame = captura.read()
             if not sucesso:
+                if fonte_e_video:
+                    # Fim do vídeo: volta ao início (demo em loop).
+                    captura.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    continue
                 print("⚠️  Falha ao capturar frame. Tentando de novo...")
                 time.sleep(0.1)
                 continue
@@ -910,23 +1800,20 @@ def main():
             # Publica o frame mais recente para o worker e pega o último resultado.
             with lock:
                 estado["frame"] = frame
-                boxes = list(estado["boxes"])
-                hud = list(estado["hud"])
-                cor = estado["cor"]
+                analise = estado["analise"]
 
             if mostrar:
-                vis = frame.copy()
-                for (x1, y1, x2, y2, label) in boxes:
-                    cv2.rectangle(vis, (x1, y1), (x2, y2), cor, 2)
-                    cv2.putText(vis, label, (x1, max(15, y1 - 6)), fonte, 0.5, cor, 1)
-                for i, linha in enumerate(hud):
-                    escala = 0.9 if i == 0 else (0.7 if i == 1 else 0.55)
-                    cor_txt = cor if i == 0 else (255, 255, 255)
-                    espessura = 2 if i <= 1 else 1
-                    cv2.putText(vis, linha, (20, 40 + i * 33), fonte, escala, cor_txt, espessura)
-                cv2.imshow("Omni-Root | John Deere Wood Inspection", vis)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
+                cv2.imshow("Omni-Root | John Deere Wood Inspection", desenhar_analise(frame, analise))
+                tecla = cv2.waitKey(1) & 0xFF
+                if tecla == ord('q'):
                     break
+                if tecla == ord('s'):
+                    # Frame CRU (sem desenho): serve para dataset e para testar
+                    # o pipeline offline com `--fonte ./capturas`.
+                    pasta_capturas.mkdir(exist_ok=True)
+                    nome = pasta_capturas / f"frame_{datetime.now():%Y%m%d_%H%M%S}.jpg"
+                    cv2.imwrite(str(nome), frame)
+                    print(f"💾 Frame salvo em {nome}")
             else:
                 # Sem janela: só mantém o worker alimentado sem ocupar 100% da CPU.
                 time.sleep(0.03)
@@ -935,7 +1822,8 @@ def main():
         print("\n🛑 Encerrando por solicitação do usuário...")
     finally:
         parar.set()
-        thread.join(timeout=2.0)
+        for t in threads:
+            t.join(timeout=2.0)
         captura.release()
         cv2.destroyAllWindows()
         print("✅ Recursos liberados. Até a próxima inspeção!")

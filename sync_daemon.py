@@ -256,7 +256,23 @@ def sincronizar_tora(pg_conn, sqlite_conn, tora) -> None:
     """
     pg_cursor = pg_conn.cursor()
     try:
-        tora_remota_id = inserir_ou_buscar_tora(pg_cursor, tora)
+        tora_remota_id, criada_agora = inserir_ou_buscar_tora(pg_cursor, tora)
+
+        # Se a tora JÁ existia no Postgres (retry após queda entre o commit
+        # remoto e a marcação local), os filhos provavelmente também já
+        # estão lá -- reinserir duplicaria indicadores e defeitos. Nesse
+        # caso só completamos o que faltar: se já há qualquer indicador
+        # remoto para essa tora, consideramos o registro inteiro enviado
+        # (o commit é atômico: ou entrou tudo, ou nada).
+        if not criada_agora:
+            pg_cursor.execute(
+                "SELECT COUNT(*) FROM indicadores_qualidade WHERE tora_id = %s",
+                (tora_remota_id,),
+            )
+            if pg_cursor.fetchone()[0] > 0:
+                print(f"↩️  Tora {tora['uuid_local'][:8]} já estava completa no Postgres — só marcando como sincronizada.")
+                marcar_sincronizada(sqlite_conn, tora["id"])
+                return
 
         # --- indicadores de qualidade ---
         indicadores = buscar_indicadores_pendentes(sqlite_conn, tora["id"])
@@ -288,19 +304,7 @@ def sincronizar_tora(pg_conn, sqlite_conn, tora) -> None:
         # Só agora marca como sincronizado no SQLite local (banco separado,
         # não entra na transação do Postgres -- por isso a ordem importa:
         # só marcamos local depois que o commit remoto já foi confirmado)
-        sqlite_conn.execute(
-            "UPDATE indicadores_qualidade_local SET sync_status = 1 WHERE tora_id = ? AND sync_status = 0",
-            (tora["id"],),
-        )
-        sqlite_conn.execute(
-            "UPDATE defeitos_detectados_local SET sync_status = 1 WHERE tora_id = ? AND sync_status = 0",
-            (tora["id"],),
-        )
-        sqlite_conn.execute(
-            "UPDATE toras_local SET sync_status = 1 WHERE id = ?",
-            (tora["id"],),
-        )
-        sqlite_conn.commit()
+        marcar_sincronizada(sqlite_conn, tora["id"])
 
     except Exception:
         pg_conn.rollback()
@@ -309,11 +313,31 @@ def sincronizar_tora(pg_conn, sqlite_conn, tora) -> None:
         pg_cursor.close()
 
 
-def inserir_ou_buscar_tora(pg_cursor, tora) -> int:
+def marcar_sincronizada(sqlite_conn, tora_id_local: int) -> None:
+    """Marca a tora e seus filhos como sync_status = 1 no SQLite local."""
+    sqlite_conn.execute(
+        "UPDATE indicadores_qualidade_local SET sync_status = 1 WHERE tora_id = ? AND sync_status = 0",
+        (tora_id_local,),
+    )
+    sqlite_conn.execute(
+        "UPDATE defeitos_detectados_local SET sync_status = 1 WHERE tora_id = ? AND sync_status = 0",
+        (tora_id_local,),
+    )
+    sqlite_conn.execute(
+        "UPDATE toras_local SET sync_status = 1 WHERE id = ?",
+        (tora_id_local,),
+    )
+    sqlite_conn.commit()
+
+
+def inserir_ou_buscar_tora(pg_cursor, tora) -> tuple[int, bool]:
     """
     Insere a tora no Postgres. Se uuid_local já existir (retry após queda
     de rede no meio de uma sincronização anterior), busca o id já existente
     em vez de duplicar -- é isso que garante idempotência.
+
+    Devolve (id_remoto, criada_agora). `criada_agora=False` significa que
+    a tora já estava lá e o chamador deve evitar duplicar os filhos.
     """
     pg_cursor.execute(
         """
@@ -335,7 +359,7 @@ def inserir_ou_buscar_tora(pg_cursor, tora) -> int:
     )
     linha = pg_cursor.fetchone()
     if linha is not None:
-        return linha[0]
+        return linha[0], True
 
     # Já existia (ON CONFLICT) -- busca o id remoto pelo uuid
     pg_cursor.execute(
@@ -344,7 +368,7 @@ def inserir_ou_buscar_tora(pg_cursor, tora) -> int:
     )
     linha = pg_cursor.fetchone()
     if linha is not None:
-        return linha[0]
+        return linha[0], False
 
     # Chegou aqui: o SELECT de origem (maquinas/talhoes) não achou
     # nenhuma linha correspondente a maquina_id/talhao_id -- não é bug,

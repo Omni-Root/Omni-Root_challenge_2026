@@ -68,6 +68,40 @@ pip install -r requirements.txt
 > Sem ele, o `main.py` cai no `yolov8n.pt` genérico e não detecta defeito de
 > madeira nenhum.
 
+### Escala automática — imprimir o marcador (uma vez)
+
+```powershell
+python calibrar.py --gerar-marcador
+```
+
+Gera `marcador_aruco_5cm.png`. Imprima em **100%** (sem "ajustar à página"),
+confira com régua que o quadrado preto tem 5 cm e cole num papelão ao lado
+da tora (na garra real, fixo no cabeçote). O `main.py` detecta o marcador em
+cada frame e calcula cm/px **sozinho** — sem ninguém clicar em nada, e
+robusto a mudança de posição da câmera. O quadrado magenta "escala" na tela
+confirma que ele foi visto.
+
+Sem marcador no frame, a escala cai para `cm_por_px` do config (calibração
+de fábrica da montagem; `python calibrar.py --regua` obtém o valor na
+maquete) e, por último, para a fórmula de GSD com óptica genérica.
+
+> Em máquina real a fonte preferencial de diâmetro/comprimento nem é a
+> câmera: o cabeçote do harvester já mede os dois (sensores nas facas e no
+> rolo) e exporta no StanForD `.hpr`. A câmera entra para o que o cabeçote
+> **não** vê: casca residual, defeitos e tortuosidade.
+
+### Exportar o modelo para CPU (uma vez por máquina)
+
+```powershell
+python exportar_modelo.py
+```
+
+O harvester não tem GPU. O `.pt` rodando direto no PyTorch custa ~2,4 s por
+frame em CPU; o mesmo modelo em **OpenVINO INT8** (runtime da Intel para
+CPU, quantizado com as fotos de `capturas/`) custa ~0,5 s. O `main.py`
+carrega `models/wood_best_int8_openvino_model` automaticamente se existir.
+O export (~170 MB) fica fora do Git — cada máquina gera o seu.
+
 ### Inspecionar com a câmera
 
 ```powershell
@@ -77,6 +111,31 @@ python main.py --gui
 Abre a janela com o vídeo ao vivo e as detecções; grava uma inspeção no SQLite a
 cada `intervalo_captura_seg`. Sai com **`q`** na janela ou `Ctrl+C`.
 Sem `--gui`, roda em modo silencioso (só console + banco).
+
+Na tela: caixas **coloridas** são defeitos que contaram; caixas **cinza
+"(ignorado)"** são detecções que o modelo fez mas os filtros descartaram
+(fora da tora ou na faixa de casca, área mínima, não persistiu). A linha
+branca é o contorno segmentado da tora; a terceira linha do HUD diz se a
+câmera está vendo a **seção** (rodela) ou a **lateral** da tora — os
+indicadores mudam de significado (ver seção 5). Tecle **`s`** para salvar o
+frame cru em `capturas/` (serve para o dataset de eucalipto e para testar
+offline com `--fonte .\capturas`).
+
+**Mão no frame:** pele e casca têm a mesma cor para a câmera; segurar a
+peça com a mão dentro do enquadramento gruda a mão na máscara e distorce
+casca e diâmetro. Na demo, apoie a peça (mesa neutra ou garra da maquete).
+
+**Fundo da maquete:** a segmentação separa madeira de fundo pela cor, então
+use uma superfície **neutra** (cinza, branca, preta, metal). Mesa de madeira
+ou terra marrom se confundem com a casca — limitação conhecida.
+
+**Plano B para a apresentação** — se a webcam falhar no palco, o mesmo
+código roda sobre um vídeo gravado ou uma pasta de fotos, sem nada mocado:
+
+```powershell
+python main.py --gui --fonte .\demo.mp4
+python main.py --gui --fonte .\fotos_demo\
+```
 
 Outras flags: `--config-file <caminho>`, `--clone <ID>`, `--idade <anos>`.
 
@@ -104,16 +163,30 @@ python tests\testar_modelo_eucalipto.py --pasta .\fotos_eucalipto --modelo .\mod
 Roda o modelo numa pasta de imagens, salva as versões anotadas em
 `resultados_teste/` e resume o que não foi detectado ou saiu com confiança baixa.
 
+### Simular a operação inteira sem câmera
+
+```powershell
+python tests\simular_cenario.py --num-toras 15 --pasta .\fotos_eucalipto
+```
+
+Roda o **mesmo** `analisar_frame()` do `main.py` sobre imagens de disco (ou
+frames sintéticos, se a pasta não existir) e grava no SQLite como a máquina
+faria. Útil para popular o Postgres/dashboard com dados produzidos pelo código
+real (`--sem-banco` só analisa).
+
 ---
 
 ## 4. O que cada peça faz
 
 ### `main.py` — inspeção em campo
-O coração do projeto. Roda em **duas threads** para a imagem nunca congelar:
+O coração do projeto. Roda em **três threads** para a imagem nunca congelar:
 
 - **Thread principal**: só captura e exibe o vídeo, na velocidade da câmera.
-- **Thread de trabalho**: roda o YOLO no frame mais recente, calcula os
-  indicadores, classifica e grava no SQLite.
+- **Thread do modelo**: roda o YOLO no frame mais recente, no ritmo que a
+  CPU der (~0,5 s com OpenVINO INT8), e publica as caixas.
+- **Thread de análise**: visão clássica (~70 ms — contorno, casca, diâmetro,
+  rachadura, status) a ~10 fps, reaproveitando as últimas caixas do modelo;
+  grava no SQLite a cada `intervalo_captura_seg`.
 
 Assim a inferência (pesada na CPU) nunca bloqueia o vídeo — no máximo as caixas
 de detecção aparecem uma fração de segundo atrás da imagem. O buffer da câmera é
@@ -145,8 +218,17 @@ virou uma linguagem a menos para manter). Ele:
 
 ### `config.json` — parâmetros da operação
 Identidade da máquina e do talhão, clone, caminhos, limiares da IA
-(`conf_threshold`, `imgsz`), índice da câmera, intervalo entre gravações e os
-parâmetros ópticos usados na conversão pixel→cm.
+(`conf_threshold`, `imgsz`), índice da câmera, intervalo entre gravações e:
+
+| Chave | O que faz |
+|---|---|
+| `marcador_aruco_cm` | Lado (cm) do marcador ArUco impresso. Se aparecer no frame, a escala px→cm vem dele, automaticamente. `0` desliga. |
+| `comprimento_corte_cm` | Comprimento de traçamento do talhão (padrão 600 = 6 m). Usado quando a câmera vê só a seção da tora. |
+| `roi` | `[x, y, w, h]` em fração do frame: só essa região vai para o modelo. `null` = frame inteiro. (`calibrar.py --roi`) |
+| `cm_por_px` | Escala fixa da montagem, usada quando não há marcador no frame (`calibrar.py --regua`). `0` = fórmula de GSD com `distancia_camera_tora_cm`, `distancia_focal_mm` e `largura_sensor_mm`. |
+| `filtro_area_minima` | Descarta caixas menores que essa fração do frame (`0` desliga). |
+| `filtro_dentro_contorno` | Descarta detecção cujo centro cai fora do contorno da tora. |
+| `filtro_persistencia` | Nº de análises consecutivas em que o defeito precisa aparecer (`1` desliga). |
 
 ### Demais diretórios
 
@@ -166,10 +248,12 @@ parâmetros ópticos usados na conversão pixel→cm.
 
 | Indicador | Como é obtido |
 |---|---|
-| Diâmetro e altura (comprimento visível) | Câmera + conversão pixel→cm por GSD, usando a **distância fixa calibrada** de `config.json` |
-| Tortuosidade | OpenCV — desvio do contorno em relação ao eixo ajustado |
-| Porcentagem de casca | OpenCV — área do contorno vs. miolo (erosão morfológica) |
+| Diâmetro | Câmera: **seção** → diâmetro equivalente pela área segmentada; **lateral** → lado menor do retângulo de área mínima. Escala px→cm: marcador ArUco (automático) > `cm_por_px` > GSD |
+| Comprimento | **Lateral** → lado maior medido. **Seção** → não é visível na imagem; usa `comprimento_corte_cm` (o comprimento fixo de traçamento do talhão — o mesmo que o cabeçote usa para cortar) e marca `metodo = comprimento_tracamento_config` |
+| Tortuosidade | OpenCV — **flecha do eixo da tora / comprimento** (%). O eixo é a linha dos pontos médios entre as bordas, fatia a fatia; 0 = reta. Só na vista **lateral**; na seção grava 0 com `metodo = nao_aplicavel_secao` em vez de inventar número. *(A versão anterior media meio diâmetro, não curvatura: tora reta e grossa dava ~60.)* |
+| Porcentagem de casca | OpenCV — **casca residual**: % da superfície da tora (dentro do contorno) no grupo escuro de um Otsu — madeira descascada é clara, casca é escura. *(A versão anterior media um anel de largura fixa em pixels.)* |
 | Apodrecimento / pragas | YOLO — ver seção 8, é o item mais crítico do projeto |
+| Rachadura radial (seção) | OpenCV — black-hat morfológico no miolo + filtro geométrico (longa, fina, reta, passando pelo centro). Cobre o que o modelo atual não vê: rachadura de secagem na face de corte. Aparece como `Crack (cv)` na tela |
 | Densidade | **Lookup por clone/material genético** (não sensor, não fórmula) — seção 7 |
 | Volume útil | Geometria (cilindro), descontado pela severidade dos defeitos |
 | Massa seca estimada | Volume útil × densidade de referência |
@@ -299,6 +383,7 @@ fine-tuning**, não uma reformulação do projeto.
 
 ```
 main.py                            # Campo: câmera + YOLO + indicadores + SQLite
+calibrar.py                        # Gera o marcador ArUco de escala (e ROI/régua opcionais p/ maquete)
 sync_daemon.py                     # SQLite local → PostgreSQL central (idempotente)
 config.json                        # Parâmetros de máquina/talhão/câmera/IA
 docker-compose.yml                 # PostgreSQL local de teste
@@ -312,7 +397,7 @@ Banco de dados/migration_clones_densidade.sql
 models/wood_best.pt                # Pesos do YOLO (fora do Git — pedir ao time)
 tests/testar_modelo_eucalipto.py   # Roda o modelo numa pasta de imagens
 tests/testar_densidade_clones.py   # Confere o lookup de densidade
-tests/simular_cenario.py           # Simula inspeção sem hardware
+tests/simular_cenario.py           # Roda o pipeline real (analisar_frame) sem câmera
 OmniRoot_Challenge_*.ipynb         # Notebooks de treino (Colab e VSCode)
 walkthrough.md                     # ⚠️ desatualizado — revisar antes de usar
 ```
@@ -343,6 +428,18 @@ walkthrough.md                     # ⚠️ desatualizado — revisar antes de u
   máquina, em ZIP), lendo direto do PostgreSQL.
 - ✅ **Tempo real sem congelamento** — `main.py` reestruturado em duas threads.
 - ✅ **Pré-processamento alinhado ao treino** (grayscale + CLAHE).
+- ✅ **ROI + filtros de inferência** — o modelo só vê a região da tora; o que
+  ele detecta fora dela aparece em cinza como "ignorado" (transparente na demo).
+- ✅ **Tortuosidade e casca corrigidas** — eixo/flecha e casca residual por Otsu
+  (seção 5). Testadas com toras sintéticas de curvatura conhecida.
+- ✅ **Inferência em CPU 5x mais rápida** — OpenVINO INT8 a 640 px
+  (`exportar_modelo.py`) e visão clássica desacoplada do modelo em thread
+  própria: contorno/casca/diâmetro/rachadura atualizam a ~10 fps, o YOLO no
+  ritmo da CPU.
+- ✅ **Segmentação por cor** (madeira x fundo) com detecção de vista
+  seção/lateral — resolve o contorno seguindo sombra/mesa das primeiras demos.
+- ✅ **Escala automática por marcador ArUco** (sem calibração manual) e
+  **`--fonte` vídeo/pasta** como plano B da apresentação.
 
 ---
 
