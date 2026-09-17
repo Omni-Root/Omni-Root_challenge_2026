@@ -111,7 +111,7 @@ def sincronizar_bancos(cfg: Config) -> None:
 
         # 1.5. Antes de subir dados, BAIXA a tabela de referência de
         # densidade por clone (sincronização no sentido inverso).
-        # Ver migration_clones_densidade.sql para o porquê.
+        # Ver "Banco de dados/setup_completo.sql", parte 3, para o porquê.
         try:
             baixar_tabela_densidade(pg_conn, cfg.cache_densidade_path)
         except Exception as e:

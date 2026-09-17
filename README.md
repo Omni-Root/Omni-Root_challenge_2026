@@ -146,7 +146,12 @@ docker compose up -d
 ```
 
 Lê as mesmas variáveis do `.env`. Na primeira subida, aplica
-`Banco de dados/setup_completo.sql` automaticamente.
+`Banco de dados/setup_completo.sql` automaticamente. Num banco que já está
+de pé, o mesmo arquivo aplica mudanças sem apagar nem duplicar nada:
+
+```powershell
+Get-Content "Banco de dados\setup_completo.sql" | docker compose exec -T postgres psql -U postgres -d desafio_madeira
+```
 
 ### Sincronizar campo → central
 
@@ -240,7 +245,7 @@ Identidade da máquina e do talhão, clone, caminhos, limiares da IA
 |---|---|
 | `data/clones_densidade.json` | Cache da tabela de densidade por clone (com fontes documentadas) |
 | `data/inventario_johndeere.json` | DAP/idade por clone, da planilha real da JD (contexto dendrométrico) |
-| `Banco de dados/` | Schemas SQLite e PostgreSQL, seed de teste e `setup_completo.sql` |
+| `Banco de dados/` | `setup_completo.sql` (o único script do Postgres: schema + seed + densidade + trigger, idempotente) e `schema_sqlite.sql` (banco local da máquina) |
 | `models/` | Pesos do YOLO (`wood_best.pt`) e imagens de avaliação do treino |
 | `tests/` | Scripts de teste sem hardware (ver seção 3) |
 | `OmniRoot_Challenge_*.ipynb` | Notebooks de treino do modelo (Colab e VSCode local) |
@@ -395,9 +400,7 @@ requirements.txt                   # Dependências de main.py e sync_daemon.py
 data/clones_densidade.json         # Cache da densidade por clone (gerado pelo sync)
 data/inventario_johndeere.json     # DAP/idade/clone da planilha real da JD
 Banco de dados/schema_sqlite.sql   # Schema local (campo)
-Banco de dados/schema_postgres.sql # Schema central
-Banco de dados/setup_completo.sql  # Schema + seed, usado pelo docker-compose
-Banco de dados/migration_clones_densidade.sql
+Banco de dados/setup_completo.sql  # Postgres central: schema + seed + densidade + trigger (único, idempotente)
 models/wood_best.pt                # Pesos do YOLO (fora do Git — pedir ao time)
 tests/testar_modelo_eucalipto.py   # Roda o modelo numa pasta de imagens
 tests/testar_densidade_clones.py   # Confere o lookup de densidade

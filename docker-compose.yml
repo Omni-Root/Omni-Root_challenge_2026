@@ -10,11 +10,10 @@
 #   3. docker compose up -d
 #   4. python sync_daemon.py
 #
-# Na PRIMEIRA subida (volume vazio), o Postgres roda sozinho, em ordem,
-# os três arquivos montados em docker-entrypoint-initdb.d:
-#   01 -> schema_postgres.sql            (tabelas)
-#   02 -> seed_teste.sql                 (máquina + talhão de teste)
-#   03 -> migration_clones_densidade.sql (tabela de densidade + clones da JD)
+# Na PRIMEIRA subida (volume vazio), o Postgres roda sozinho o único
+# script do banco central, "Banco de dados/setup_completo.sql" (schema +
+# seed + densidade por clone + trigger de tempo real). Para aplicar
+# mudanças num banco que já está de pé, veja o cabeçalho do próprio SQL.
 #
 # ATENÇÃO: esses scripts SÓ rodam quando o volume é criado do zero. Se
 # você já tinha subido antes e quer recomeçar limpo:
