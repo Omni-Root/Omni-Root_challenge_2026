@@ -71,6 +71,13 @@ class Config:
     modelo_ncnn_path: str = "./models/wood_ncnn_model"   # compatibilidade
     conf_threshold: float = 0.40
     iou_threshold: float = 0.55
+    # Limiar de confiança POR CLASSE (sobrepõe conf_threshold para a classe).
+    # O modelo foi treinado em madeira serrada: em tora de eucalipto ele
+    # confunde casca com "resin" e a borda escura com "Live_Knot" — são as
+    # duas classes que mais aparecem "no nada" na demo. Exigir mais delas (e
+    # só delas) corta a maior parte dos falsos positivos sem retreinar e sem
+    # esconder rachadura/nó morto, que continuam no limiar geral.
+    conf_por_classe: dict = None  # ex.: {"resin": 0.80, "Live_Knot": 0.70}
     # A webcam entrega 640x480: inferir a 1024 só amplia pixel, sem informação
     # nova, e custa 3x. O export OpenVINO/NCNN é gerado com tamanho FIXO --
     # tem que ser o mesmo daqui (exportar_modelo.py lê este valor).
@@ -140,6 +147,19 @@ class Config:
     # este valor — é o mesmo que o cabeçote usa para traçar.
     comprimento_corte_cm: float = 600.0
 
+    # --- Balanço de branco pela BORDA do frame (ver balancear_branco) ---
+    # A luz do ambiente muda a cor de tudo (na sala de vocês a mesa branca
+    # saiu azulada). A câmera é fixa e a tora fica no centro, então a borda
+    # do frame é fundo: estima-se o "cinza" ali e corrige o frame inteiro.
+    # Só afeta a parte clássica (segmentação, portão, casca) — o modelo
+    # recebe gray+CLAHE como sempre. Ganho limitado para não desbotar
+    # madeira. DESLIGADO por padrão (0): nos testes com a peça segurada na
+    # mão, o deslocamento de cor bagunçou a segmentação por saturação, e o
+    # portão já tolera luz fria/quente pela regra "pálido e claro = madeira".
+    # Ligue (ex.: 0.10 = 10% de cada lado) só se o fundo do palco sair
+    # colorido e a segmentação sofrer — e teste antes com --fonte.
+    balanco_branco_borda: float = 0.0
+
     # --- Portão "isso é madeira?" (ver validar_tora) ---
     # A segmentação SEMPRE acha algum blob no centro (é o trabalho dela);
     # quem decide se aquilo é uma tora é este portão. Sem ele, teclado,
@@ -157,10 +177,11 @@ class Config:
     # some por `evento_frames_fechar` (garra vazia) ou quando o contorno
     # "pula" (outra tora entrou sem gap), e grava UM registro consolidando
     # todos os quadros: mediana dos indicadores, união dos defeitos.
-    # "intervalo": comportamento antigo — grava a cada intervalo_captura_seg,
-    # tenha tora ou não (mantido só para comparação/depuração).
+    # "intervalo": grava a cada intervalo_captura_seg enquanto houver tora no
+    # frame (o portão "é madeira?" impede gravar garra vazia/teclado). É o
+    # padrão desta branch: o dashboard atualiza a cada 2 s na demo.
     # Em máquina real o gatilho natural seria o ciclo de corte do cabeçote.
-    modo_gravacao: str = "evento"
+    modo_gravacao: str = "intervalo"
     evento_frames_abrir: int = 3         # análises seguidas com tora para abrir
     evento_frames_fechar: int = 6        # análises seguidas sem tora para fechar (~0,6 s a 10 fps)
     evento_frames_minimo: int = 4        # evento mais curto que isso é ruído: descarta
@@ -352,14 +373,26 @@ def inventario_atual(intervalo_checagem_s: float = 1.0) -> dict:
                     mudancas.append(f"{clone}: {d_antigo} -> {d_novo} kg/m3")
             for clone in antigo.keys() - novo.keys():
                 mudancas.append(f"{clone}: removido")
-            resumo = "; ".join(mudancas[:6]) + (" ..." if len(mudancas) > 6 else "")
-            print(f"📥 Tabela de densidade recarregada do disco ({len(novo)} clones). " + (f"Mudanças: {resumo}" if mudancas else "Sem mudança de valor."))
-            _AVISOS_CLONE_SEM_DENSIDADE.clear()  # se o clone foi cadastrado, o aviso some; se não, avisa de novo
+            # O sync regrava o arquivo a cada ciclo (timestamp novo) mesmo sem
+            # mudança: só fala quando algum VALOR mudou, senão vira spam.
+            if mudancas:
+                resumo = "; ".join(mudancas[:6]) + (" ..." if len(mudancas) > 6 else "")
+                print(f"📥 Tabela de densidade recarregada do disco ({len(novo)} clones). Mudanças: {resumo}")
+                _AVISOS_CLONE_SEM_DENSIDADE.clear()  # se o clone foi cadastrado, o aviso some; se não, avisa de novo
 
         _INVENTARIO["dados"] = novo
         _INVENTARIO["assinatura"] = assinatura
         INVENTARIO_FLORESTAL = novo
         return novo
+
+
+CONF_POR_CLASSE_PADRAO = {"resin": 0.80, "Live_Knot": 0.70, "Marrow": 0.65, "Quartzity": 0.70}
+
+
+def limiar_da_classe(cfg: Config, tipo_defeito: str) -> float:
+    """Limiar de confiança para uma classe: o específico se houver, senão o geral."""
+    tabela = cfg.conf_por_classe if isinstance(cfg.conf_por_classe, dict) else CONF_POR_CLASSE_PADRAO
+    return float(tabela.get(tipo_defeito, cfg.conf_threshold))
 
 
 INVENTARIO_FLORESTAL = inventario_atual()
@@ -797,6 +830,55 @@ def extrair_contorno_tora(frame: np.ndarray) -> np.ndarray | None:
         return max(candidatos, key=pontuacao)[1]
     except Exception:
         return None
+
+
+# ------------------------------------------------------------
+# BALANÇO DE BRANCO — estimado pela borda do frame
+# ------------------------------------------------------------
+# Gray-world clássico assume que a MÉDIA da cena é cinza; com uma tora
+# marrom ocupando o centro isso desbotaria justamente a madeira. Aqui o
+# cinza é estimado só na moldura externa do frame (fundo: mesa, garra,
+# parede), e o ganho por canal fica preso em [0.8, 1.25]. Resultado: mesa
+# azulada ou amarelada vira neutra, a madeira mantém a cor, e a segmentação
+# por saturação + o portão de cor ficam estáveis entre ambientes.
+# ------------------------------------------------------------
+
+def balancear_branco(frame: np.ndarray, borda: float = 0.10) -> np.ndarray:
+    if frame is None or not borda or borda <= 0:
+        return frame
+    try:
+        h, w = frame.shape[:2]
+        by, bx = max(2, int(h * borda)), max(2, int(w * borda))
+        moldura = np.zeros((h, w), dtype=bool)
+        moldura[:by, :] = True
+        moldura[-by:, :] = True
+        moldura[:, :bx] = True
+        moldura[:, -bx:] = True
+        pixels = frame[moldura].astype(np.float32)
+        # Só pixels de superfície NEUTRA entram na estimativa: nem muito
+        # escuros/claros (sombra, estouro) nem saturados (madeira, mão,
+        # objeto colorido que invade a borda). O tom que sobra num cinza é
+        # a cor da luz — é isso que se corrige.
+        brilho = pixels.mean(axis=1)
+        sat = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)[..., 1][moldura].astype(np.float32)
+        neutro = (brilho > 40) & (brilho < 235) & (sat < 60)
+        # Se a borda NÃO é majoritariamente neutra (tinte forte demais, ou
+        # tora/mão ocupando a moldura), a estimativa não é confiável: não
+        # corrige. Corrigir errado é pior que não corrigir.
+        if neutro.mean() < 0.5:
+            return frame
+        validos = pixels[neutro]
+        if validos.shape[0] < 200:
+            return frame
+        medias = validos.mean(axis=0)  # B, G, R
+        alvo = float(medias.mean())
+        ganhos = np.clip(alvo / np.maximum(medias, 1.0), 0.8, 1.25)
+        if np.allclose(ganhos, 1.0, atol=0.02):
+            return frame
+        corrigido = frame.astype(np.float32) * ganhos.reshape(1, 1, 3)
+        return np.clip(corrigido, 0, 255).astype(np.uint8)
+    except Exception:
+        return frame
 
 
 # ------------------------------------------------------------
@@ -1260,6 +1342,10 @@ def extrair_defeitos_yolo(resultado, cfg: Config, frame_shape: tuple | None = No
         classe_id = int(box.cls[0])
         tipo_defeito = nomes_classes.get(classe_id, "wood_defect")
         confianca = float(box.conf[0])
+        # O predict roda com o limiar GERAL; aqui aplica o da classe, que
+        # pode ser mais exigente (ver conf_por_classe).
+        if confianca < limiar_da_classe(cfg, tipo_defeito):
+            continue
         x1, y1, x2, y2 = box.xyxy[0].tolist()
         largura = max(0.0, x2 - x1)
         altura = max(0.0, y2 - y1)
@@ -1598,8 +1684,10 @@ def analisar_frame(
     # reserva. O portão decide se o blob achado é mesmo uma tora; se não
     # for, o frame é tratado como "sem tora": nenhum defeito conta, nada
     # é medido e o evento de tora não abre.
-    mask, contorno, origem_seg = segmentar_tora_origem(recorte)
-    eh_tora, motivo_sem_tora, _ = validar_tora(recorte, mask, contorno, origem_seg, cfg)
+    # Cor corrigida pela luz do ambiente só para a parte clássica.
+    recorte_cor = balancear_branco(recorte, cfg.balanco_branco_borda)
+    mask, contorno, origem_seg = segmentar_tora_origem(recorte_cor)
+    eh_tora, motivo_sem_tora, _ = validar_tora(recorte_cor, mask, contorno, origem_seg, cfg)
     if not eh_tora:
         mask, contorno = None, None
     interior = mascara_interior(mask) if mask is not None else None
@@ -1666,7 +1754,7 @@ def analisar_frame(
         tortuosidade = 0.0
 
     densidade = calcular_densidade_estimada(cfg.clone_id)
-    porcentagem_casca = calcular_porcentagem_casca(recorte, contorno)
+    porcentagem_casca = calcular_porcentagem_casca(recorte_cor, contorno)
     volume_util_m3 = calcular_volume_m3(diametro_cm, comprimento_cm, confianca_saude)
     massa_seca_kg = calcular_massa_seca_kg(volume_util_m3, densidade)
 
