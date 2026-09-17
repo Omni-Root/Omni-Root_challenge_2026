@@ -121,6 +121,15 @@ indicadores mudam de significado (ver seção 5). Tecle **`s`** para salvar o
 frame cru em `capturas/` (serve para o dataset de eucalipto e para testar
 offline com `--fonte .\capturas`).
 
+**Portão "isso é madeira?"** — a segmentação sempre acha *algum* blob no
+centro do frame (num teclado ou num notebook também). Antes disso bastar
+para medir e gravar, `validar_tora()` exige: segmentação **pela cor** (o
+fallback de brilho não vale), maioria dos pixels com **cor de madeira**
+(matiz quente, ou pálido e claro), **solidez** ≥ 0,8 (tora é convexa; mão
+aberta não), fração de **pele** baixa e proporção sã. Reprovou em qualquer
+um → HUD mostra `SEM TORA (motivo)`, nenhum defeito conta, nada é medido, o
+evento de tora não abre. Todos os limiares são `tora_*` no `config.json`.
+
 **Mão no frame:** pele e casca têm a mesma cor para a câmera; segurar a
 peça com a mão dentro do enquadramento gruda a mão na máscara e distorce
 casca e diâmetro. Na demo, apoie a peça (mesa neutra ou garra da maquete).
@@ -138,6 +147,31 @@ python main.py --gui --fonte .\fotos_demo\
 ```
 
 Outras flags: `--config-file <caminho>`, `--clone <ID>`, `--idade <anos>`.
+
+### Câmera ao vivo no dashboard (opcional)
+
+Com `stream_url` preenchido no `config.json` (ex.:
+`http://<ip-do-dashboard>:3001/api/camera/frame`) e `STREAM_TOKEN` igual nos
+dois `.env` (máquina e dashboard), o `main.py` **empurra** o frame anotado
+(caixas + HUD) em JPEG a `stream_fps` (padrão 4) para o servidor do dashboard,
+que o mostra no painel "Câmera ao vivo". A direção é a mesma do sync — campo →
+central — porque em campo a máquina está atrás de 4G/NAT. Sem rede, a thread
+só recua e tenta de novo; captura, modelo e SQLite nunca esperam por ela. No
+painel, máquina sem rede aparece como **"Sem sinal"** com o último quadro
+escurecido. `stream_url` vazio desliga.
+
+### Fine-tuning de eucalipto (ver seção 8)
+
+```powershell
+# 1) pré-anota as fotos próprias com o modelo atual (vocês só corrigem)
+python preparar_dataset_eucalipto.py pre-anotar --fotos .\fotos_eucalipto --saida .\anotacoes
+# 2) depois de revisar anotacoes/labels/, monta o dataset (CLAHE, split, data.yaml)
+python preparar_dataset_eucalipto.py montar --anotadas .\anotacoes --negativos .\fotos_negativas --rehearsal 1500
+# 3) treina a partir do checkpoint atual e valida nos dois domínios
+python fine_tuning_eucalipto.py --data .\dataset\eucalipto_yolo\data.yaml
+# 4) exporta para CPU e aponta modelo_path no config.json
+python exportar_modelo.py --pesos .\models\wood_eucalipto_best.pt
+```
 
 ### Subir o PostgreSQL central (local, para testes)
 
@@ -195,7 +229,29 @@ O coração do projeto. Roda em **três threads** para a imagem nunca congelar:
 
 Assim a inferência (pesada na CPU) nunca bloqueia o vídeo — no máximo as caixas
 de detecção aparecem uma fração de segundo atrás da imagem. O buffer da câmera é
-fixado em 1 frame para não acumular atraso.
+fixado em 1 frame para não acumular atraso. Uma quarta thread, opcional, envia
+o frame anotado para o dashboard (câmera ao vivo, seção 3).
+
+**Uma tora = um registro (`modo_gravacao: "evento"`).** Antes, o loop gravava
+uma inspeção a cada 2 s tivesse tora no frame ou não — uma tora parada 10 s na
+garra virava 5 registros, e garra vazia também gerava linha; o dashboard contava
+"toras", mas eram janelas de 2 s. Agora o `RastreadorTora` transforma a
+sequência de quadros em **eventos**: abre quando a tora aparece e se mantém por
+`evento_frames_abrir` análises, fecha quando some por `evento_frames_fechar`
+(garra vazia) ou quando o contorno "pula" (outra tora entrou sem gap), e grava
+**um** registro consolidando todos os quadros — **mediana** dos indicadores
+geométricos (robusta a quadro ruim), comprimento/tortuosidade só dos quadros
+laterais, **união** dos defeitos por tipo+posição exigindo presença em
+`evento_defeito_min_quadros` quadros, e saúde/status recalculados sobre os
+defeitos consolidados com as mesmas regras da seção 6. Eventos mais curtos que
+`evento_frames_minimo` são descartados como ruído. O HUD mostra
+"Tora #N em analise | 36 quadros | 4.2s" e o log diz quantos quadros a tora
+consolidou. `modo_gravacao: "intervalo"` volta ao comportamento antigo. Em
+máquina real o gatilho natural seria o ciclo de corte do cabeçote.
+Teste sem câmera: `python tests\testar_evento_tora.py`.
+
+Com `--fonte <pasta>`, o `FonteImagens` insere 1 s de frame preto entre as
+imagens (garra vazia), para o evento fechar e reabrir como faria com a câmera.
 
 Antes de ir ao modelo, cada frame passa por `preprocessar_para_modelo()`:
 **escala de cinza + CLAHE**, exatamente o mesmo pré-processamento usado no
@@ -238,6 +294,12 @@ Identidade da máquina e do talhão, clone, caminhos, limiares da IA
 | `filtro_area_minima` | Descarta caixas menores que essa fração do frame (`0` desliga). |
 | `filtro_dentro_contorno` | Descarta detecção cujo centro cai fora do contorno da tora. |
 | `filtro_persistencia` | Nº de análises consecutivas em que o defeito precisa aparecer (`1` desliga). |
+| `tora_exigir_cor`, `tora_solidez_min`, `tora_fracao_pele_max`, `tora_razao_max`, `tora_fracao_madeira_min` | Portão "é madeira?" (seção 3). Reprovou → `SEM TORA`, nada é gravado. |
+| `modo_gravacao` | `evento` (uma tora = um registro, padrão) ou `intervalo` (grava a cada `intervalo_captura_seg`, comportamento antigo). |
+| `evento_frames_abrir` / `_fechar` / `_minimo` | Análises seguidas com tora para abrir; sem tora para fechar; mínimo para não ser ruído. |
+| `evento_iou_troca` / `evento_frames_troca` | Contorno com IoU abaixo disso por tantos quadros = outra tora entrou sem gap. |
+| `evento_defeito_min_quadros` | Defeito precisa aparecer em N quadros do evento para entrar no registro. |
+| `stream_url`, `stream_fps`, `stream_largura_px`, `stream_jpeg_qualidade` | Câmera ao vivo no dashboard (seção 3). URL vazia desliga; token em `STREAM_TOKEN` no `.env`. |
 
 ### Demais diretórios
 
@@ -260,9 +322,9 @@ Identidade da máquina e do talhão, clone, caminhos, limiares da IA
 | Diâmetro | Câmera: **seção** → diâmetro equivalente pela área segmentada; **lateral** → lado menor do retângulo de área mínima. Escala px→cm: marcador ArUco (automático) > `cm_por_px` > GSD |
 | Comprimento | **Lateral** → lado maior medido. **Seção** → não é visível na imagem; usa `comprimento_corte_cm` (o comprimento fixo de traçamento do talhão — o mesmo que o cabeçote usa para cortar) e marca `metodo = comprimento_tracamento_config` |
 | Tortuosidade | OpenCV — **flecha do eixo da tora / comprimento** (%). O eixo é a linha dos pontos médios entre as bordas, fatia a fatia; 0 = reta. Só na vista **lateral**; na seção grava 0 com `metodo = nao_aplicavel_secao` em vez de inventar número. *(A versão anterior media meio diâmetro, não curvatura: tora reta e grossa dava ~60.)* |
-| Porcentagem de casca | OpenCV — **casca residual**: % da superfície da tora (dentro do contorno) no grupo escuro de um Otsu — madeira descascada é clara, casca é escura. *(A versão anterior media um anel de largura fixa em pixels.)* |
+| Porcentagem de casca | OpenCV — **casca residual**: % da superfície da tora (dentro do contorno) mais escura que 60% do brilho da madeira exposta (percentil 90). *(Versões anteriores: anel de largura fixa; depois Otsu — que dividia um disco limpo com sombra em 30–50% de "casca", porque Otsu sempre separa em dois grupos.)* |
 | Apodrecimento / pragas | YOLO — ver seção 8, é o item mais crítico do projeto |
-| Rachadura radial (seção) | OpenCV — black-hat morfológico no miolo + filtro geométrico (longa, fina, reta, passando pelo centro). Cobre o que o modelo atual não vê: rachadura de secagem na face de corte. Aparece como `Crack (cv)` na tela |
+| Rachadura radial (seção) | OpenCV — black-hat morfológico no miolo + filtro geométrico (longa, fina, reta, passando pelo centro). Cobre o que o modelo atual não vê: rachadura de secagem na face de corte. Aparece como `Crack (cv)` na tela. É isenta do filtro de área mínima (a área de uma linha é minúscula — um bug que a descartava foi corrigido) |
 | Densidade | **Lookup por clone/material genético** (não sensor, não fórmula) — seção 7 |
 | Volume útil | Geometria (cilindro), descontado pela severidade dos defeitos |
 | Massa seca estimada | Volume útil × densidade de referência |
@@ -338,6 +400,17 @@ numérico documentado para isso).
 
 ---
 
+### O que NÃO depende do modelo (importante para o pitch)
+
+O enunciado define qualidade da madeira por **densidade básica, tortuosidade
+e quantidade de casca**. Nenhum dos três vem do YOLO: densidade é lookup por
+clone, tortuosidade e casca são OpenCV clássico — assim como diâmetro,
+comprimento, volume, massa seca e a rachadura radial. O modelo cobre nós e
+defeitos de superfície, e tem uma lacuna de domínio documentada (seção 8).
+Se o fine-tuning não sair, o sistema continua entregando o que o desafio
+pede; a defesa honesta é "detecção de nós é prova de conceito em dataset
+público; a lacuna está identificada e o caminho de especialização existe".
+
 ## 8. Visão computacional — o item mais crítico do projeto
 
 ### O que já foi corrigido
@@ -362,13 +435,37 @@ industrial — **não é eucalipto, não é casca, é outro domínio visual inte
 (testamos) — é **domain mismatch**. O modelo nunca viu casca de eucalipto
 saudável, então não distingue "textura normal" de "defeito".
 
-### O plano
-1. **Fine-tuning em duas etapas**, complementando o modelo (não substituindo):
-   fotos reais de eucalipto saudável **e** com defeito, depois as 8 classes.
-2. **Fonte de fotos:** dataset da UTFPR (tora real de eucalipto brasileiro) +
-   fotos próprias compradas de madeireira.
-3. **Descoberta importante:** o setor escaneia a **superfície/casca** ao longo do
-   comprimento, não a face cortada — as fotos devem priorizar casca.
+### O plano (ferramentas prontas: `preparar_dataset_eucalipto.py` + `fine_tuning_eucalipto.py`)
+
+Procuramos e **não existe dataset público de tora de eucalipto com defeito
+anotado**. O que há: madeira serrada (o que já usamos) e tora inteira para
+máquina florestal sem defeito (TimberSeg 1.0, 220 fotos de forwarder;
+datasets de contagem de face de tora no Roboflow). Logo o caminho é
+**fabricar um dataset pequeno no domínio exato da demo** e adaptar o
+checkpoint atual — três ingredientes:
+
+1. **Fotos próprias** (200–500): as peças que vocês têm, pela **mesma webcam**
+   do `main.py` (tecla `s`), variando seção/lateral, casca, rachadura, luz,
+   ângulo e distância. `pre-anotar` roda o modelo atual com conf baixa e gera
+   labels-rascunho + prévias — vocês **corrigem** (Roboflow/CVAT/LabelImg,
+   formato YOLO) em vez de anotar do zero. Foto sem defeito com label vazio
+   também é informação.
+2. **Negativos** (5–10% do total, label vazio): mão, teclado, mesa, garra
+   vazia, parede. É a forma documentada pelo Ultralytics de ensinar "isso não
+   é defeito" — resolve o "detectou defeito na mão" **na raiz**, não só nos
+   filtros pós-inferência.
+3. **Rehearsal**: `montar --rehearsal 1500` mistura uma amostra do dataset
+   original para o modelo não esquecer as 8 classes (catastrophic forgetting).
+
+`fine_tuning_eucalipto.py` parte de `models/wood_best.pt` com backbone
+congelado (`freeze=10`), LR baixo, `imgsz=640` (o mesmo da inferência — o
+treino original foi a 1024) e, no fim, **valida nos dois domínios**: o novo e
+o original. É esse par de números que se mostra à banca: "aprendeu eucalipto
+sem perder o que sabia". `--modelo yolov8s.pt` permite comparar um modelo
+menor para a CPU da garra.
+
+Descoberta importante: o setor escaneia a **superfície/casca** ao longo do
+comprimento, não a face cortada — as fotos devem priorizar casca.
 
 **Se o fine-tuning não sair a tempo,** a defesa honesta é: "usamos um dataset
 público europeu como prova de conceito de arquitetura; identificamos e
@@ -405,6 +502,9 @@ models/wood_best.pt                # Pesos do YOLO (fora do Git — pedir ao tim
 tests/testar_modelo_eucalipto.py   # Roda o modelo numa pasta de imagens
 tests/testar_densidade_clones.py   # Confere o lookup de densidade
 tests/simular_cenario.py           # Roda o pipeline real (analisar_frame) sem câmera
+tests/testar_evento_tora.py        # RastreadorTora com análises sintéticas (sem modelo)
+preparar_dataset_eucalipto.py      # Pré-anota fotos próprias, junta negativos + rehearsal, gera data.yaml
+fine_tuning_eucalipto.py           # Continua o treino do checkpoint atual e valida nos dois domínios
 OmniRoot_Challenge_*.ipynb         # Notebooks de treino (Colab e VSCode)
 walkthrough.md                     # ⚠️ desatualizado — revisar antes de usar
 ```
@@ -413,11 +513,11 @@ walkthrough.md                     # ⚠️ desatualizado — revisar antes de u
 
 ## 11. Pendências, em ordem de prioridade
 
-1. **[Crítico] Fine-tuning de eucalipto** — coletar fotos (UTFPR + compra),
-   anotar no Roboflow e retreinar a partir do checkpoint atual. É o maior risco
-   do projeto hoje. *(O script `fine_tuning_eucalipto.py` citado em versões
-   anteriores deste README **não está neste repositório** — precisa ser
-   recuperado ou reescrito.)*
+1. **[Crítico] Fine-tuning de eucalipto** — fotografar as peças com a webcam
+   (200–500 fotos) + negativos (mão, teclado, mesa), revisar a pré-anotação e
+   rodar `fine_tuning_eucalipto.py` na máquina com GPU. As ferramentas estão
+   prontas (seção 8); o que falta é **coletar e revisar as fotos**. É o maior
+   risco do projeto hoje.
 2. **[Importante] Validar o StanForD** — o Export StanForD já existe no
    dashboard, mas é baseado na documentação pública da Skogforsk e **não** foi
    validado contra o XSD oficial. Não declarar como "certificado".
@@ -428,6 +528,14 @@ walkthrough.md                     # ⚠️ desatualizado — revisar antes de u
    ser gerado e preenchido com nome da equipe/instituição.
 
 ### Já concluído
+- ✅ **Uma tora = um registro** — `RastreadorTora` (evento abre/fecha pela
+  presença da tora; mediana + união dos quadros). Testado sem câmera e com
+  `--fonte .\capturas`.
+- ✅ **Câmera ao vivo no dashboard** — thread de stream no `main.py` → painel
+  MJPEG no dashboard, com "Sem sinal" quando a máquina some.
+- ✅ **Ferramentas de fine-tuning** — `preparar_dataset_eucalipto.py`
+  (pré-anotação, negativos, rehearsal) e `fine_tuning_eucalipto.py`
+  (validação dupla).
 - ✅ **Dashboard** — existe e está funcionando
   ([omni-root-dashboard](https://github.com/Omni-Root/omni-root-dashboard)), com
   login, painéis e exportações.
