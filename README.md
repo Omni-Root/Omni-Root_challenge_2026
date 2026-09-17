@@ -232,7 +232,13 @@ de detecção aparecem uma fração de segundo atrás da imagem. O buffer da câ
 fixado em 1 frame para não acumular atraso. Uma quarta thread, opcional, envia
 o frame anotado para o dashboard (câmera ao vivo, seção 3).
 
-**Uma tora = um registro (`modo_gravacao: "evento"`).** Antes, o loop gravava
+**Gravação.** Nesta branch o padrão é `modo_gravacao: "intervalo"`: grava a
+cada `intervalo_captura_seg` **enquanto houver tora no frame** (o portão "é
+madeira?" impede gravar garra vazia ou teclado) — é o que mantém o dashboard
+atualizando a cada 2 s na demo. O modo `"evento"` abaixo fica disponível como
+opção.
+
+**Uma tora = um registro (`modo_gravacao: "evento"`, opcional).** Antes, o loop gravava
 uma inspeção a cada 2 s tivesse tora no frame ou não — uma tora parada 10 s na
 garra virava 5 registros, e garra vazia também gerava linha; o dashboard contava
 "toras", mas eram janelas de 2 s. Agora o `RastreadorTora` transforma a
@@ -295,7 +301,9 @@ Identidade da máquina e do talhão, clone, caminhos, limiares da IA
 | `filtro_dentro_contorno` | Descarta detecção cujo centro cai fora do contorno da tora. |
 | `filtro_persistencia` | Nº de análises consecutivas em que o defeito precisa aparecer (`1` desliga). |
 | `tora_exigir_cor`, `tora_solidez_min`, `tora_fracao_pele_max`, `tora_razao_max`, `tora_fracao_madeira_min` | Portão "é madeira?" (seção 3). Reprovou → `SEM TORA`, nada é gravado. |
-| `modo_gravacao` | `evento` (uma tora = um registro, padrão) ou `intervalo` (grava a cada `intervalo_captura_seg`, comportamento antigo). |
+| `conf_por_classe` | Limiar de confiança por classe, sobrepondo `conf_threshold`. Padrão: `resin` 0,80, `Live_Knot` 0,70, `Marrow` 0,65, `Quartzity` 0,70 — as classes que o modelo (treinado em madeira serrada) mais confunde com casca e borda de eucalipto. `Crack`/`Dead_Knot` ficam no geral. |
+| `balanco_branco_borda` | Balanço de branco estimado pela borda do frame (fundo). **0 = desligado (padrão)**; ligue (ex. 0.10) só se o fundo do palco sair colorido e a segmentação sofrer — teste antes com `--fonte`. |
+| `modo_gravacao` | `intervalo` (padrão: grava a cada `intervalo_captura_seg` enquanto há tora) ou `evento` (uma tora = um registro). |
 | `evento_frames_abrir` / `_fechar` / `_minimo` | Análises seguidas com tora para abrir; sem tora para fechar; mínimo para não ser ruído. |
 | `evento_iou_troca` / `evento_frames_troca` | Contorno com IoU abaixo disso por tantos quadros = outra tora entrou sem gap. |
 | `evento_defeito_min_quadros` | Defeito precisa aparecer em N quadros do evento para entrar no registro. |
