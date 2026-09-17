@@ -1,6 +1,6 @@
 {
   "_leiame": "CACHE SINCRONIZADO AUTOMATICAMENTE do PostgreSQL central (tabela clones_densidade) pelo sync_daemon.py. NÃO edite este arquivo à mão -- as alterações serão sobrescritas na próxima sincronização. Para mudar um valor, altere na tabela do Postgres, que é a fonte de verdade. O campo 'tipo_dado' de cada clone diz de onde veio o número: 'laboratorio' (laudo real da empresa), 'literatura' (valor publicado para este clone específico) ou 'referencia_generica' (média do híbrido, ainda aguardando dado do clone).",
-  "_sincronizado_em": "2026-09-14T21:50:34",
+  "_sincronizado_em": "2026-09-16T21:49:24",
   "_total_clones": 17,
   "386": {
     "densidade_base": 490.0,

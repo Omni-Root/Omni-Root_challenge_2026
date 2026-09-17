@@ -22,5 +22,9 @@
   "distancia_focal_mm": 4.0,
   "largura_sensor_mm": 6.3,
   "marcador_aruco_cm": 5.0,
-  "comprimento_corte_cm": 600.0
+  "comprimento_corte_cm": 600.0,
+  "stream_url": "http://localhost:3001/api/camera/frame",
+  "stream_fps": 4.0,
+  "stream_largura_px": 640,
+  "stream_jpeg_qualidade": 70
 }
