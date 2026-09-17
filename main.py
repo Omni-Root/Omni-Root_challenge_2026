@@ -324,9 +324,12 @@ def inventario_atual(intervalo_checagem_s: float = 1.0) -> dict:
                     mudancas.append(f"{clone}: {d_antigo} -> {d_novo} kg/m3")
             for clone in antigo.keys() - novo.keys():
                 mudancas.append(f"{clone}: removido")
-            resumo = "; ".join(mudancas[:6]) + (" ..." if len(mudancas) > 6 else "")
-            print(f"📥 Tabela de densidade recarregada do disco ({len(novo)} clones). " + (f"Mudanças: {resumo}" if mudancas else "Sem mudança de valor."))
-            _AVISOS_CLONE_SEM_DENSIDADE.clear()  # se o clone foi cadastrado, o aviso some; se não, avisa de novo
+            # O sync regrava o arquivo a cada ciclo (timestamp novo) mesmo sem
+            # mudança: só fala quando algum VALOR mudou, senão vira spam.
+            if mudancas:
+                resumo = "; ".join(mudancas[:6]) + (" ..." if len(mudancas) > 6 else "")
+                print(f"📥 Tabela de densidade recarregada do disco ({len(novo)} clones). Mudanças: {resumo}")
+                _AVISOS_CLONE_SEM_DENSIDADE.clear()  # se o clone foi cadastrado, o aviso some; se não, avisa de novo
 
         _INVENTARIO["dados"] = novo
         _INVENTARIO["assinatura"] = assinatura
