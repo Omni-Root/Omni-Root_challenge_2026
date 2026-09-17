@@ -214,7 +214,11 @@ virou uma linguagem a menos para manter). Ele:
   indicadores + defeitos) entrou — nunca fica "meio sincronizada";
 - **também baixa** a tabela `clones_densidade` do Postgres e regrava o cache
   local `data/clones_densidade.json`. Por isso esse arquivo **não deve ser
-  editado à mão**: a fonte de verdade é o banco central.
+  editado à mão**: a fonte de verdade é o banco central. O `main.py`
+  **recarrega o cache sozinho** quando o arquivo muda em disco
+  (`inventario_atual()`, confere o mtime 1×/s) e imprime a mudança
+  (`📥 ... SP3108: 490.0 -> 512.0 kg/m3`) — cadastrou no banco, em ~1 s a
+  máquina já usa o valor novo, sem reiniciar. É a demonstração que a JD pediu.
 
 ### `config.json` — parâmetros da operação
 Identidade da máquina e do talhão, clone, caminhos, limiares da IA

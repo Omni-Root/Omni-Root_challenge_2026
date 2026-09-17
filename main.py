@@ -168,10 +168,10 @@ def carregar_inventario_florestal(
         genético. É esse o dado que, na prática do setor (confirmado por
         e-mail com o contato da John Deere), varia por genética e não por
         medição em campo.
-        ATENÇÃO: os valores aí HOJE são placeholders de demonstração, não
-        dados publicados/verificados. Antes da apresentação final, troquem
-        por valores reais — pedidos à Suzano/John Deere, ou de literatura
-        técnica (IPEF, Embrapa Florestas etc.), e citem a fonte no relatório.
+        O arquivo é um CACHE gravado pelo sync_daemon.py a partir da tabela
+        clones_densidade do Postgres (fonte de verdade); cada clone traz
+        'tipo_dado' e 'fonte'. Não editar à mão. A recarga em tempo de
+        execução é feita por inventario_atual().
 
       - inventario_johndeere.json: amostras de DAP por árvore, agrupadas por
         clone — isso sim vem da planilha real de inventário que a JD
@@ -263,7 +263,78 @@ def carregar_configuracao_json(caminho_json: str = "./config.json") -> Config:
     return cfg
 
 
-INVENTARIO_FLORESTAL = carregar_inventario_florestal()
+# ------------------------------------------------------------
+# RECARGA AUTOMÁTICA DA TABELA DE DENSIDADE
+# ------------------------------------------------------------
+# O sync_daemon.py regrava data/clones_densidade.json toda vez que baixa a
+# tabela do Postgres central. Antes, o main.py lia o arquivo UMA vez no
+# import: cadastrar a densidade de um clone no banco só valia depois de
+# reiniciar a máquina -- justamente a demonstração que a JD pediu. Agora
+# `inventario_atual()` confere o mtime/tamanho dos JSONs (um stat, barato)
+# no máximo 1x por segundo e recarrega quando mudaram. O sync grava por
+# arquivo temporário + replace (atômico), então nunca lemos JSON pela metade;
+# se mesmo assim a leitura falhar, fica o cache anterior.
+# ------------------------------------------------------------
+_ARQUIVOS_INVENTARIO = ("./data/clones_densidade.json", "./data/inventario_johndeere.json")
+_INVENTARIO = {"dados": {}, "assinatura": None, "checado_em": -1e9}
+_INVENTARIO_LOCK = threading.Lock()
+_AVISOS_CLONE_SEM_DENSIDADE: set = set()
+
+
+def _assinatura_inventario() -> tuple:
+    saida = []
+    for caminho in _ARQUIVOS_INVENTARIO:
+        p = Path(caminho)
+        try:
+            st = p.stat()
+            saida.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            saida.append(None)
+    return tuple(saida)
+
+
+def inventario_atual(intervalo_checagem_s: float = 1.0) -> dict:
+    """Dicionário por clone, recarregado sozinho quando os JSONs mudam em disco."""
+    global INVENTARIO_FLORESTAL
+    with _INVENTARIO_LOCK:
+        agora = time.monotonic()
+        if agora - _INVENTARIO["checado_em"] < intervalo_checagem_s:
+            return _INVENTARIO["dados"]
+        _INVENTARIO["checado_em"] = agora
+
+        assinatura = _assinatura_inventario()
+        if assinatura == _INVENTARIO["assinatura"]:
+            return _INVENTARIO["dados"]
+        try:
+            novo = carregar_inventario_florestal(*_ARQUIVOS_INVENTARIO)
+        except Exception as e:
+            print(f"⚠️  Não consegui reler a tabela de densidade ({e}); mantendo a anterior.")
+            return _INVENTARIO["dados"]
+
+        antigo = _INVENTARIO["dados"]
+        if _INVENTARIO["assinatura"] is not None:
+            # Não é a primeira carga: diz o que mudou, para a demo ficar visível
+            mudancas = []
+            for clone, info in novo.items():
+                d_novo = info.get("densidade_base")
+                d_antigo = (antigo.get(clone) or {}).get("densidade_base")
+                if clone not in antigo:
+                    mudancas.append(f"{clone}: novo ({d_novo} kg/m3)")
+                elif d_novo != d_antigo:
+                    mudancas.append(f"{clone}: {d_antigo} -> {d_novo} kg/m3")
+            for clone in antigo.keys() - novo.keys():
+                mudancas.append(f"{clone}: removido")
+            resumo = "; ".join(mudancas[:6]) + (" ..." if len(mudancas) > 6 else "")
+            print(f"📥 Tabela de densidade recarregada do disco ({len(novo)} clones). " + (f"Mudanças: {resumo}" if mudancas else "Sem mudança de valor."))
+            _AVISOS_CLONE_SEM_DENSIDADE.clear()  # se o clone foi cadastrado, o aviso some; se não, avisa de novo
+
+        _INVENTARIO["dados"] = novo
+        _INVENTARIO["assinatura"] = assinatura
+        INVENTARIO_FLORESTAL = novo
+        return novo
+
+
+INVENTARIO_FLORESTAL = inventario_atual()
 CONFIG = carregar_configuracao_json()
 
 
@@ -369,18 +440,22 @@ def calcular_densidade_estimada(clone_id: str, inventario_stats: dict | None = N
     cai num valor genérico de eucalipto e avisa no console — isso é
     intencional, para não mascarar dado faltante com um número inventado.
     """
-    inv = inventario_stats if inventario_stats is not None else INVENTARIO_FLORESTAL
+    inv = inventario_stats if inventario_stats is not None else inventario_atual()
     key = str(clone_id).upper()
     info = inv.get(key)
 
     if not info or info.get("densidade_base") is None:
-        print(
-            f"⚠️  Sem densidade cadastrada para o clone '{clone_id}'. Usando média "
-            f"genérica de eucalipto (500.0 kg/m3). Para corrigir, cadastre o valor "
-            f"na tabela 'clones_densidade' do PostgreSQL central (fonte de verdade) "
-            f"— o sync_daemon.py traz a atualização automaticamente na próxima "
-            f"sincronização."
-        )
+        # Avisa UMA vez por clone (a análise roda ~10x/s); volta a avisar se
+        # a tabela for recarregada e o clone continuar sem densidade.
+        if key not in _AVISOS_CLONE_SEM_DENSIDADE:
+            _AVISOS_CLONE_SEM_DENSIDADE.add(key)
+            print(
+                f"⚠️  Sem densidade cadastrada para o clone '{clone_id}'. Usando média "
+                f"genérica de eucalipto (500.0 kg/m3). Para corrigir, cadastre o valor "
+                f"na tabela 'clones_densidade' do PostgreSQL central (fonte de verdade) "
+                f"— o sync_daemon.py traz a atualização automaticamente na próxima "
+                f"sincronização, e o main.py recarrega sozinho, sem reiniciar."
+            )
         return 500.0
 
     return round(float(info["densidade_base"]), 1)

@@ -33,7 +33,12 @@ from pathlib import Path
 # a lógica de densidade (não a de visão), substituímos esses dois por
 # módulos vazios -- assim o script roda mesmo em máquina sem o modelo
 # instalado/baixado.
-sys.modules.setdefault("cv2", types.ModuleType("cv2"))
+try:
+    import cv2  # noqa: F401  (se estiver instalado, usa o real)
+except ImportError:
+    # MagicMock aceita qualquer chamada (main.py cria um CLAHE no import)
+    from unittest.mock import MagicMock
+    sys.modules["cv2"] = MagicMock()
 _ultra = types.ModuleType("ultralytics")
 _ultra.YOLO = lambda *a, **k: None
 sys.modules.setdefault("ultralytics", _ultra)
