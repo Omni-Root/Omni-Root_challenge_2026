@@ -160,6 +160,24 @@ class Config:
     # colorido e a segmentação sofrer — e teste antes com --fonte.
     balanco_branco_borda: float = 0.0
 
+    # --- Fundo de referência (ver segmentar_por_fundo) ---
+    # A câmera é FIXA na garra: o fundo é sempre o mesmo; a tora é o que
+    # muda. Com um frame de referência da garra vazia, a segmentação vira
+    # "o que difere do fundo" — independe da cor da madeira, do lençol, da
+    # mesa ou da luz. É o método clássico de inspeção com câmera fixa e o
+    # único que funciona quando madeira clara e fundo claro têm a mesma cor
+    # para a câmera (testado em casa: auto-balanço da webcam deixou o disco
+    # da cor do lençol). Captura: tecla 'b' com a garra vazia, ou automática
+    # nos primeiros `fundo_auto_seg` segundos (só para câmera; 0 desliga).
+    # Sem fundo capturado, cai na segmentação por cor (mesa neutra).
+    # Captura automática DESLIGADA por padrão (0): se a peça já estiver na
+    # frente da câmera ao iniciar, ela vira "fundo" e nunca mais é detectada
+    # -- aconteceu. Tecle 'b' com a mesa vazia; a miniatura no canto da
+    # janela mostra o que foi capturado.
+    fundo_auto_seg: float = 0.0
+    fundo_limiar: float = 22.0           # distância Lab mínima para "difere do fundo"
+    fundo_salvar_em: str = "./capturas/fundo_referencia.jpg"  # cópia do fundo capturado (inspeção); "" não salva
+
     # --- Portão "isso é madeira?" (ver validar_tora) ---
     # A segmentação SEMPRE acha algum blob no centro (é o trabalho dela);
     # quem decide se aquilo é uma tora é este portão. Sem ele, teclado,
@@ -167,7 +185,7 @@ class Config:
     # explicáveis; qualquer um reprovado = "Sem tora" (nada é gravado).
     tora_exigir_cor: bool = True        # só aceita segmentação pela COR (fallback de brilho não vale)
     tora_solidez_min: float = 0.80      # área / área do casco convexo: tora é convexa; mão/objetos irregulares não
-    tora_fracao_pele_max: float = 0.45  # fração de pixels com matiz de pele; acima disso é mão, não madeira
+    tora_fracao_pele_max: float = 0.60  # fração de pixels com matiz de pele; acima disso é mão (mão real: 0,7-0,9; madeira rosada chega a 0,4)
     tora_razao_max: float = 6.0         # lado maior / lado menor acima disso = cabo, borda, ruído
     tora_fracao_madeira_min: float = 0.55  # fração de pixels da máscara com cor de madeira (matiz quente + saturação)
 
@@ -177,11 +195,16 @@ class Config:
     # some por `evento_frames_fechar` (garra vazia) ou quando o contorno
     # "pula" (outra tora entrou sem gap), e grava UM registro consolidando
     # todos os quadros: mediana dos indicadores, união dos defeitos.
-    # "intervalo": grava a cada intervalo_captura_seg enquanto houver tora no
-    # frame (o portão "é madeira?" impede gravar garra vazia/teclado). É o
-    # padrão desta branch: o dashboard atualiza a cada 2 s na demo.
+    # O evento é INCREMENTAL: assim que abre (evento_frames_minimo quadros)
+    # o registro já é gravado e enviado; enquanto a tora continua na frente
+    # da câmera, o MESMO registro é atualizado a cada intervalo_captura_seg
+    # com os quadros acumulados (o dashboard vê a tora em ~1 s e vê os
+    # números se refinando); tirou a tora, para. Uma tora = um registro,
+    # sem esperar a tora sair para aparecer no dashboard.
+    # "intervalo": grava um registro NOVO a cada intervalo_captura_seg
+    # enquanto houver tora (janelas de 2 s, não toras) — só comparação.
     # Em máquina real o gatilho natural seria o ciclo de corte do cabeçote.
-    modo_gravacao: str = "intervalo"
+    modo_gravacao: str = "evento"
     evento_frames_abrir: int = 3         # análises seguidas com tora para abrir
     evento_frames_fechar: int = 6        # análises seguidas sem tora para fechar (~0,6 s a 10 fps)
     evento_frames_minimo: int = 4        # evento mais curto que isso é ruído: descarta
@@ -906,7 +929,133 @@ def segmentar_tora(frame: np.ndarray) -> tuple[np.ndarray | None, np.ndarray | N
     return mask, contorno
 
 
-def segmentar_tora_origem(frame: np.ndarray) -> tuple[np.ndarray | None, np.ndarray | None, str]:
+def _componente_central(mask: np.ndarray, area_min_frac: float = 0.03) -> np.ndarray | None:
+    """Máscara (255) do componente que contém o centro do frame, ou do mais próximo dele; None se nada grande."""
+    h, w = mask.shape[:2]
+    n, rotulos, stats, centroides = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    if n <= 1:
+        return None
+    cx0, cy0 = w / 2.0, h / 2.0
+    area_min = area_min_frac * h * w
+    rotulo_centro = rotulos[int(cy0), int(cx0)]
+    if rotulo_centro > 0 and stats[rotulo_centro, cv2.CC_STAT_AREA] >= area_min:
+        escolhido = rotulo_centro
+    else:
+        melhor = None
+        for i in range(1, n):
+            if stats[i, cv2.CC_STAT_AREA] < area_min:
+                continue
+            d = (centroides[i][0] - cx0) ** 2 + (centroides[i][1] - cy0) ** 2
+            if melhor is None or d < melhor[0]:
+                melhor = (d, i)
+        if melhor is None:
+            return None
+        escolhido = melhor[1]
+    return (rotulos == escolhido).astype(np.uint8) * 255
+
+
+def fundo_e_escuro(frame: np.ndarray, borda: float = 0.08) -> tuple[bool, float]:
+    """(True, V_mediano_da_borda) se a moldura do frame é escura (mesa preta, garra escura)."""
+    h, w = frame.shape[:2]
+    by, bx = max(2, int(h * borda)), max(2, int(w * borda))
+    v = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)[..., 2]
+    moldura = np.concatenate([v[:by].ravel(), v[-by:].ravel(), v[:, :bx].ravel(), v[:, -bx:].ravel()])
+    med = float(np.median(moldura))
+    return med < 60.0, med
+
+
+def segmentar_fundo_escuro(frame: np.ndarray, ignorar: np.ndarray | None = None) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """
+    MESA PRETA (o cenário da banca): madeira x preto é uma separação de
+    BRILHO — não depende da cor da madeira, do balanço de branco nem de
+    casca/sem casca. Limiar = brilho da borda (fundo) + margem, com piso.
+    Pixels muito escuros têm saturação-ruído, por isso este caminho vem
+    ANTES do de cor quando a borda é escura.
+    """
+    try:
+        h, w = frame.shape[:2]
+        v = cv2.GaussianBlur(cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)[..., 2], (7, 7), 0)
+        by, bx = max(2, int(h * 0.08)), max(2, int(w * 0.08))
+        moldura = np.concatenate([v[:by].ravel(), v[-by:].ravel(), v[:, :bx].ravel(), v[:, -bx:].ravel()])
+        # Mediana, não percentil alto: um tronco lateral atravessa o quadro e
+        # ocupa parte da borda; a mediana continua sendo o preto da mesa
+        # enquanto a tora cobrir menos da metade da moldura.
+        limiar = max(55.0, float(np.median(moldura)) + 35.0)
+        mask = (v > limiar).astype(np.uint8) * 255
+        if ignorar is not None:
+            mask[ignorar > 0] = 0
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25)))
+        if np.count_nonzero(mask) > 0.9 * h * w:
+            return None, None
+        comp = _componente_central(mask)
+        if comp is None:
+            return None, None
+        contornos, _ = cv2.findContours(comp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contornos:
+            return None, None
+        contorno = max(contornos, key=cv2.contourArea)
+        # Casca muito escura pode ficar abaixo do limiar e "morder" a borda da
+        # tora: tora é convexa, então fecha pelo casco quando é convexo mordido.
+        casco = cv2.convexHull(contorno)
+        a_c, a_h = cv2.contourArea(contorno), cv2.contourArea(casco)
+        if a_h > 0 and a_c / a_h >= 0.6:
+            contorno = casco
+        out = np.zeros((h, w), dtype=np.uint8)
+        cv2.drawContours(out, [contorno], -1, 255, -1)
+        return out, contorno
+    except Exception:
+        return None, None
+
+
+def segmentar_por_calor(frame: np.ndarray, ignorar: np.ndarray | None = None) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """
+    Madeira é QUENTE (amarelo/laranja/marrom: Lab b* > 0); papel, parede,
+    lençol branco e mesa cinza saem NEUTROS ou FRIOS numa webcam (o
+    auto-balanço puxa o branco para o azul). Otsu no canal b* separa as
+    duas classes; a tora é a classe quente. Só vale se as classes estão
+    de fato separadas (diferença de médias >= 8) — senão devolve None e
+    a segmentação por saturação assume. Medido nas capturas: papel b=106-112,
+    miolo da madeira b=132-137, casca b=138-142.
+    """
+    try:
+        h, w = frame.shape[:2]
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        b = cv2.GaussianBlur(lab[..., 2], (9, 9), 0)
+        val = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)[..., 2]
+        t, _ = cv2.threshold(b, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        quente = b > t
+        if quente.mean() < 0.02 or quente.mean() > 0.98:
+            return None, None
+        sep = float(b[quente].mean()) - float(b[~quente].mean())
+        if sep < 8.0 or t < 118:
+            return None, None  # sem contraste quente x frio (ou tudo é quente: mesa de madeira)
+        mask = (quente & (val >= 20)).astype(np.uint8) * 255
+        if ignorar is not None:
+            mask[ignorar > 0] = 0
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (21, 21)))
+        if np.count_nonzero(mask) > 0.9 * h * w:
+            return None, None
+        comp = _componente_central(mask)
+        if comp is None:
+            return None, None
+        contornos, _ = cv2.findContours(comp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contornos:
+            return None, None
+        contorno = max(contornos, key=cv2.contourArea)
+        casco = cv2.convexHull(contorno)
+        a_c, a_h = cv2.contourArea(contorno), cv2.contourArea(casco)
+        if a_h > 0 and a_c / a_h >= 0.6:
+            contorno = casco  # tora é convexa; fecha "mordidas" de miolo claro
+        out = np.zeros((h, w), dtype=np.uint8)
+        cv2.drawContours(out, [contorno], -1, 255, -1)
+        return out, contorno
+    except Exception:
+        return None, None
+
+
+def segmentar_tora_origem(frame: np.ndarray, ignorar: np.ndarray | None = None) -> tuple[np.ndarray | None, np.ndarray | None, str]:
     """
     Devolve (mascara, contorno, origem). `origem` diz QUAL caminho achou a
     tora: "cor" (saturação + matiz de madeira — confiável) ou "brilho"
@@ -915,6 +1064,17 @@ def segmentar_tora_origem(frame: np.ndarray) -> tuple[np.ndarray | None, np.ndar
     """
     if frame is None or frame.size == 0:
         return None, None, "nenhuma"
+    # Mesa/garra escura: brilho separa melhor que cor (e a saturação de
+    # pixels pretos é ruído). É o cenário da banca (mesa preta).
+    escuro, _ = fundo_e_escuro(frame)
+    if escuro:
+        m, c = segmentar_fundo_escuro(frame, ignorar)
+        return (m, c, "fundo_escuro") if m is not None else (None, None, "nenhuma")
+    # Fundo claro/neutro: quente x frio separa melhor que saturação (papel e
+    # parede brancos saem azulados na webcam; madeira sai quente).
+    m, c = segmentar_por_calor(frame, ignorar)
+    if m is not None:
+        return m, c, "cor"
     try:
         h, w = frame.shape[:2]
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -958,6 +1118,9 @@ def segmentar_tora_origem(frame: np.ndarray) -> tuple[np.ndarray | None, np.ndar
             c = extrair_contorno_tora(frame)
             return (_mascara_do_contorno(frame.shape, c), c, "brilho") if c is not None else (None, None, "nenhuma")
 
+        if ignorar is not None:
+            mask[ignorar > 0] = 0
+
         # Componente conectado que contém o centro (é para onde a câmera aponta);
         # senão, o de centroide mais próximo do centro. Exige área >= 3% do frame.
         n, rotulos, stats, centroides = cv2.connectedComponentsWithStats(mask, connectivity=8)
@@ -997,6 +1160,94 @@ def segmentar_tora_origem(frame: np.ndarray) -> tuple[np.ndarray | None, np.ndar
 
 
 # ------------------------------------------------------------
+# SEGMENTAÇÃO POR FUNDO DE REFERÊNCIA (câmera fixa)
+# ------------------------------------------------------------
+# Diferença, em Lab, entre o frame atual e o frame de referência da garra
+# vazia. Antes de comparar, o brilho (L) do frame é alinhado ao da
+# referência pela BORDA (fundo): a auto-exposição da webcam muda quando uma
+# peça clara entra no quadro, e sem isso o frame inteiro "difere". Pixels
+# que diferem mais que `limiar` formam a máscara; o componente que contém o
+# centro (ou o mais próximo) é a tora, e o contorno externo preenchido
+# resolve o miolo (que pode ter cor parecida com o fundo — só a borda e os
+# anéis diferem, mas o preenchimento fecha o disco).
+# ------------------------------------------------------------
+
+def segmentar_por_fundo(frame: np.ndarray, fundo: np.ndarray, limiar: float = 22.0, ignorar: np.ndarray | None = None) -> tuple[np.ndarray | None, np.ndarray | None, str]:
+    """Devolve (mascara, contorno, motivo). motivo: "" ok, "sem diferenca do fundo", "fundo mudou (tecle b)"."""
+    if frame is None or fundo is None or frame.shape != fundo.shape:
+        return None, None, "fundo invalido"
+    try:
+        h, w = frame.shape[:2]
+        lab_f = cv2.cvtColor(cv2.GaussianBlur(frame, (5, 5), 0), cv2.COLOR_BGR2LAB).astype(np.float32)
+        lab_b = cv2.cvtColor(cv2.GaussianBlur(fundo, (5, 5), 0), cv2.COLOR_BGR2LAB).astype(np.float32)
+
+        by, bx = max(2, int(h * 0.08)), max(2, int(w * 0.08))
+        moldura = np.zeros((h, w), dtype=bool)
+        moldura[:by, :] = True
+        moldura[-by:, :] = True
+        moldura[:, :bx] = True
+        moldura[:, -bx:] = True
+        # Alinha o brilho global pela borda (fundo): compensa auto-exposição.
+        d_l = float(np.median(lab_f[..., 0][moldura]) - np.median(lab_b[..., 0][moldura]))
+        if abs(d_l) < 60:
+            lab_f[..., 0] -= d_l
+
+        dist = np.linalg.norm(lab_f - lab_b, axis=2)
+        mask = (dist > limiar).astype(np.uint8) * 255
+        if ignorar is not None:
+            mask[ignorar > 0] = 0
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25)))
+        # Fundo inteiro "diferente" = luz mudou, câmera mexeu ou fundo trocou:
+        # não é tora, e o operador precisa recapturar o fundo.
+        if np.count_nonzero(mask) > 0.85 * h * w:
+            return None, None, "fundo mudou (tecle b)"
+
+        n, rotulos, stats, centroides = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        if n <= 1:
+            return None, None, "sem diferenca do fundo"
+        cx0, cy0 = w / 2.0, h / 2.0
+        area_min = 0.03 * h * w
+        escolhido = None
+        rotulo_centro = rotulos[int(cy0), int(cx0)]
+        if rotulo_centro > 0 and stats[rotulo_centro, cv2.CC_STAT_AREA] >= area_min:
+            escolhido = rotulo_centro
+        else:
+            melhor = None
+            for i in range(1, n):
+                if stats[i, cv2.CC_STAT_AREA] < area_min:
+                    continue
+                d = (centroides[i][0] - cx0) ** 2 + (centroides[i][1] - cy0) ** 2
+                if melhor is None or d < melhor[0]:
+                    melhor = (d, i)
+            if melhor is not None:
+                escolhido = melhor[1]
+        if escolhido is None:
+            return None, None, "sem diferenca do fundo"
+
+        comp = (rotulos == escolhido).astype(np.uint8) * 255
+        contornos, _ = cv2.findContours(comp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contornos:
+            return None, None, "sem diferenca do fundo"
+        contorno = max(contornos, key=cv2.contourArea)
+        # Miolo claro pode ter a MESMA cor do fundo (madeira pálida x parede
+        # branca): a diferença acha a casca e os anéis, mas deixa "mordidas"
+        # no contorno. Tora é convexa (disco ou tronco), então, se o
+        # componente é um convexo mordido (>= 60% do casco), a máscara vira
+        # o casco convexo. Formas muito abertas (mão, cabos) ficam como
+        # estão e caem no portão.
+        casco = cv2.convexHull(contorno)
+        area_c, area_h = cv2.contourArea(contorno), cv2.contourArea(casco)
+        if area_h > 0 and area_c / area_h >= 0.6:
+            contorno = casco
+        out = np.zeros((h, w), dtype=np.uint8)
+        cv2.drawContours(out, [contorno], -1, 255, -1)  # preenche o miolo
+        return out, contorno, ""
+    except Exception:
+        return None, None, "erro"
+
+
+# ------------------------------------------------------------
 # PORTÃO "ISSO É MADEIRA?"
 # ------------------------------------------------------------
 # A segmentação acha "o blob do centro" -- num teclado, num notebook, numa
@@ -1022,7 +1273,7 @@ def validar_tora(frame: np.ndarray, mask: np.ndarray | None, contorno, origem: s
     if mask is None or contorno is None or len(contorno) < 3:
         return False, "sem contorno", met
     try:
-        if cfg.tora_exigir_cor and origem != "cor":
+        if cfg.tora_exigir_cor and origem not in ("cor", "fundo", "fundo_escuro"):
             return False, "sem cor de madeira", met
 
         (_, _), (a, b), _ = cv2.minAreaRect(np.asarray(contorno, dtype=np.float32).reshape(-1, 1, 2))
@@ -1046,9 +1297,14 @@ def validar_tora(frame: np.ndarray, mask: np.ndarray | None, contorno, origem: s
         if hue.size < 100:
             return False, "mascara minuscula", met
 
-        # Pele: matiz 0-10 (ou 170-180), saturação média, claro. Casca é
-        # mais escura e mais laranja; madeira exposta é mais amarela.
-        pele = ((hue <= 10) | (hue >= 172)) & (sat >= 35) & (sat <= 170) & (val >= 90)
+        # Pele x madeira rosada: o que separa é o VERMELHO (Lab a*): pele
+        # a* >= 140 (OpenCV, +12 e acima); madeira clara/rosada fica em
+        # 131-136 e casca em ~136-140. Matiz sozinho não separa (a madeira
+        # desta câmera sai com matiz 9-13, igual à pele).
+        lab_a = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)[..., 1][dentro].astype(np.int32)
+        # Saturação limitada: pele fica em S 30-130; casca avermelhada muito
+        # saturada (S > 130) não é pele. Ajuste fino: tora_fracao_pele_max.
+        pele = (lab_a >= 140) & (sat >= 30) & (sat <= 130) & (val >= 80)
         fracao_pele = float(np.mean(pele))
         met["pele"] = round(fracao_pele, 3)
         if fracao_pele > cfg.tora_fracao_pele_max:
@@ -1057,8 +1313,11 @@ def validar_tora(frame: np.ndarray, mask: np.ndarray | None, contorno, origem: s
         # Madeira = matiz quente com alguma saturação (casca, madeira amarelada)
         # OU pálida e clara (madeira exposta creme: nesses pixels a saturação
         # é baixa e o matiz vira ruído -- não dá para exigir "quente").
+        lab_b = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)[..., 2][dentro].astype(np.int32)
         quente = ((hue <= 35) | (hue >= 165)) & (sat >= 20) & (val >= 20)
-        palida = (sat < 45) & (val >= 110)
+        # Pálida só conta como madeira se NÃO for fria: papel/parede brancos
+        # saem azulados (b* < 128) na webcam e não podem passar por madeira.
+        palida = (sat < 45) & (val >= 110) & (lab_b >= 128)
         madeira = quente | palida
         fracao_madeira = float(np.mean(madeira))
         met["madeira"] = round(fracao_madeira, 3)
@@ -1516,6 +1775,9 @@ def gerar_hash_sha256(dados: dict) -> str:
 def conectar_banco(cfg: Config) -> sqlite3.Connection:
     conexao = sqlite3.connect(cfg.sqlite_path)
     conexao.execute("PRAGMA foreign_keys = ON")
+    # WAL: o sync_daemon lê (snapshot) enquanto esta thread escreve, sem
+    # "database is locked" e sem misturar versões de uma mesma tora.
+    conexao.execute("PRAGMA journal_mode=WAL")
 
     # Verifica se a tabela toras_local já existe, caso contrário carrega o schema
     tabelas = conexao.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='toras_local'").fetchall()
@@ -1534,11 +1796,12 @@ def salvar_inspecao(
     defeitos: list,
     status_classificacao: str,
     confianca_media: float,
+    uuid_local: str | None = None,
 ) -> str:
-    """Grava a tora + indicadores + defeitos nas 3 tabelas locais."""
+    """Grava a tora + indicadores + defeitos nas 3 tabelas locais. `uuid_local` fixo permite atualizar depois."""
     cursor = conexao.cursor()
 
-    uuid_local = str(uuid.uuid4())
+    uuid_local = uuid_local or str(uuid.uuid4())
     log_id = f"LOG-{datetime.now():%Y%m%d%H%M%S}-{uuid_local[:4]}"
     data_inspecao = datetime.now().isoformat(timespec="seconds")
 
@@ -1589,6 +1852,52 @@ def salvar_inspecao(
 
     conexao.commit()
     return uuid_local
+
+
+def atualizar_inspecao(
+    conexao: sqlite3.Connection,
+    uuid_local: str,
+    indicadores: dict,
+    defeitos: list,
+    status_classificacao: str,
+    confianca_media: float,
+) -> bool:
+    """
+    Atualiza uma tora já gravada (evento incremental): troca indicadores e
+    defeitos pelos consolidados até agora, recalcula o hash e volta
+    sync_status para 0 — o sync_daemon reenvia e o Postgres é atualizado
+    (UPSERT por uuid_local). Devolve False se o uuid não existe.
+    """
+    cursor = conexao.cursor()
+    linha = cursor.execute("SELECT id, log_id FROM toras_local WHERE uuid_local = ?", (uuid_local,)).fetchone()
+    if linha is None:
+        return False
+    tora_id, log_id = linha[0], linha[1]
+    hash_dados = gerar_hash_sha256({
+        "uuid_local": uuid_local,
+        "log_id": log_id,
+        "indicadores": indicadores,
+        "defeitos": defeitos,
+        "status": status_classificacao,
+    })
+    cursor.execute(
+        "UPDATE toras_local SET confianca_ia = ?, status_classificacao = ?, hash_sha256 = ?, sync_status = 0 WHERE id = ?",
+        (confianca_media, status_classificacao, hash_dados, tora_id),
+    )
+    cursor.execute("DELETE FROM indicadores_qualidade_local WHERE tora_id = ?", (tora_id,))
+    cursor.execute("DELETE FROM defeitos_detectados_local WHERE tora_id = ?", (tora_id,))
+    for tipo, d in indicadores.items():
+        cursor.execute(
+            "INSERT INTO indicadores_qualidade_local (tora_id, tipo_indicador, valor, unidade, metodo_medicao, sync_status) VALUES (?, ?, ?, ?, ?, 0)",
+            (tora_id, tipo, d["valor"], d["unidade"], d["metodo"]),
+        )
+    for d in defeitos:
+        cursor.execute(
+            "INSERT INTO defeitos_detectados_local (tora_id, tipo_defeito, pos_x, pos_y, largura, altura, confianca, sync_status) VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
+            (tora_id, d["tipo_defeito"], d["pos_x"], d["pos_y"], d["largura"], d["altura"], d["confianca"]),
+        )
+    conexao.commit()
+    return True
 
 
 # ============================================================
@@ -1650,6 +1959,7 @@ def analisar_frame(
     persistencia: "FiltroPersistencia | None" = None,
     defeitos_yolo: "list | None" = None,
     yolo_novo: bool = True,
+    fundo: "np.ndarray | None" = None,
 ) -> dict:
     """
     Executa o pipeline completo num frame BGR e devolve um dicionário com:
@@ -1686,8 +1996,34 @@ def analisar_frame(
     # é medido e o evento de tora não abre.
     # Cor corrigida pela luz do ambiente só para a parte clássica.
     recorte_cor = balancear_branco(recorte, cfg.balanco_branco_borda)
-    mask, contorno, origem_seg = segmentar_tora_origem(recorte_cor)
-    eh_tora, motivo_sem_tora, _ = validar_tora(recorte_cor, mask, contorno, origem_seg, cfg)
+
+    # Marcador ArUco antes da segmentação: além da escala, o cartão branco
+    # do marcador é EXCLUÍDO da máscara (numa mesa preta ele seria o objeto
+    # mais claro do quadro e viraria "tora pálida").
+    cm_por_px, marcador = escala_por_marcador(frame, cfg.marcador_aruco_cm)
+    ignorar = None
+    if marcador is not None:
+        ignorar = np.zeros(recorte.shape[:2], dtype=np.uint8)
+        pts = (marcador.astype(np.int32) - np.array([rx, ry], dtype=np.int32)).reshape(-1, 1, 2)
+        cv2.fillConvexPoly(ignorar, pts, 255)
+        lado = float(np.mean([np.linalg.norm(marcador[i] - marcador[(i + 1) % 4]) for i in range(4)]))
+        k = max(3, int(0.35 * lado)) | 1
+        ignorar = cv2.dilate(ignorar, cv2.getStructuringElement(cv2.MORPH_RECT, (k, k)))
+
+    # Com fundo de referência (câmera fixa), ele é a ÚNICA fonte: "nada
+    # difere do fundo" significa garra vazia, e cair na cor aqui devolveria
+    # o fundo inteiro quando madeira e fundo têm a mesma cor. Sem fundo
+    # capturado, segmenta por cor (madeira quente x fundo neutro).
+    if fundo is not None:
+        fundo_rec, _ = recortar_roi(fundo, cfg)
+        mask, contorno, motivo_fundo = segmentar_por_fundo(recorte, fundo_rec, cfg.fundo_limiar, ignorar)
+        origem_seg = "fundo" if mask is not None else "nenhuma"
+        eh_tora, motivo_sem_tora, _ = validar_tora(recorte_cor, mask, contorno, origem_seg, cfg)
+        if not eh_tora and motivo_fundo:
+            motivo_sem_tora = motivo_fundo
+    else:
+        mask, contorno, origem_seg = segmentar_tora_origem(recorte_cor, ignorar)
+        eh_tora, motivo_sem_tora, _ = validar_tora(recorte_cor, mask, contorno, origem_seg, cfg)
     if not eh_tora:
         mask, contorno = None, None
     interior = mascara_interior(mask) if mask is not None else None
@@ -1723,8 +2059,7 @@ def analisar_frame(
     # --- 5. Saúde da tora, ponderada pela GRAVIDADE de cada defeito ---
     confianca_saude = calcular_confianca_saude(defeitos)
 
-    # --- 6. Escala px -> cm: marcador ArUco (automático) > config > GSD ---
-    cm_por_px, marcador = escala_por_marcador(frame, cfg.marcador_aruco_cm)
+    # --- 6. Escala px -> cm: marcador ArUco (já detectado acima) > config > GSD ---
     if cm_por_px is not None:
         metodo_escala = "marcador_aruco"
     else:
@@ -1791,11 +2126,14 @@ def analisar_frame(
         f"Saude {confianca_saude:.0%} | Casca {porcentagem_casca:.1f}% | Defeitos {len(defeitos)}"
         + (f" (+{len(descartados)} ign.)" if descartados else ""),
         f"{rotulo_vista} | Diam {diametro_cm:.1f}cm | {compr_txt} | Dens {densidade:.0f}kg/m3 | {tort_txt}",
-        f"Escala: {metodo_escala} ({cm_por_px * 10:.2f} mm/px)" + ("" if comprimento_medido else "  *comprimento de tracamento"),
+        f"Escala: {metodo_escala} ({cm_por_px * 10:.2f} mm/px) | Seg: {origem_seg if eh_tora else '-'}"
+        + ("" if fundo is not None else " | sem fundo de ref. (tecle b com a garra vazia)")
+        + ("" if comprimento_medido else "  *comprimento de tracamento"),
     ]
 
     return {
         "status": status,
+        "segmentacao": origem_seg,
         "eh_tora": eh_tora,
         "motivo_sem_tora": motivo_sem_tora,
         "confianca_saude": confianca_saude,
@@ -1832,7 +2170,7 @@ def resumir_analise(uuid_gerado: str, cfg: Config, a: dict) -> str:
     )
 
 
-def desenhar_analise(frame: np.ndarray, a: dict | None) -> np.ndarray:
+def desenhar_analise(frame: np.ndarray, a: dict | None, miniatura_fundo: "np.ndarray | None" = None) -> np.ndarray:
     """
     Desenha o resultado sobre uma cópia do frame. Caixas MANTIDAS na cor do
     status; caixas IGNORADAS pelos filtros em cinza fino, com o motivo
@@ -1841,6 +2179,18 @@ def desenhar_analise(frame: np.ndarray, a: dict | None) -> np.ndarray:
     """
     vis = frame.copy()
     fonte = cv2.FONT_HERSHEY_SIMPLEX
+
+    # Miniatura do fundo de referência no canto inferior direito: o operador
+    # VÊ o que foi capturado -- se a peça aparecer aqui, o fundo está errado.
+    if miniatura_fundo is not None:
+        th, tw = miniatura_fundo.shape[:2]
+        H, W = vis.shape[:2]
+        if th + 30 < H and tw + 10 < W:
+            y0, x0 = H - th - 8, W - tw - 8
+            vis[y0:y0 + th, x0:x0 + tw] = miniatura_fundo
+            cv2.rectangle(vis, (x0 - 1, y0 - 1), (x0 + tw, y0 + th), (255, 0, 255), 1)
+            cv2.putText(vis, "fundo de ref. (b)", (x0, y0 - 6), fonte, 0.45, (255, 0, 255), 1, cv2.LINE_AA)
+
     if a is None:
         cv2.putText(vis, "Analisando...", (20, 40), fonte, 0.9, (255, 255, 255), 2)
         return vis
@@ -2045,6 +2395,16 @@ class RastreadorTora:
         self.trocas = 0
         self.bbox_anterior: tuple | None = None
         self.descartados_ruido = 0
+        self.uuid_atual: str | None = None  # registro já gravado do evento aberto (incremental)
+
+    def parcial(self) -> dict | None:
+        """Consolidação do evento ABERTO até agora (None se não há evento com quadros suficientes)."""
+        if not self.aberto or len(self.analises) < self.cfg.evento_frames_minimo:
+            return None
+        evento = consolidar_evento(self.analises, self.cfg)
+        evento["numero"] = self.numero + 1
+        evento["duracao_s"] = round(time.monotonic() - self.inicio, 2)
+        return evento
 
     @staticmethod
     def _presente(a: dict) -> bool:
@@ -2052,6 +2412,7 @@ class RastreadorTora:
 
     def _fechar(self) -> dict | None:
         analises, self.analises = self.analises, []
+        uuid_evento, self.uuid_atual = self.uuid_atual, None
         self.aberto = False
         self.ausentes = 0
         self.trocas = 0
@@ -2063,6 +2424,7 @@ class RastreadorTora:
         evento = consolidar_evento(analises, self.cfg)
         evento["numero"] = self.numero
         evento["duracao_s"] = round(time.monotonic() - self.inicio, 2)
+        evento["uuid_local"] = uuid_evento  # None se nunca foi gravado (não deveria acontecer)
         return evento
 
     def atualizar(self, a: dict) -> dict | None:
@@ -2116,7 +2478,8 @@ class RastreadorTora:
     def descricao(self) -> str:
         """Linha de HUD: estado atual do rastreador."""
         if self.aberto:
-            return f"Tora #{self.numero + 1} em analise | {len(self.analises)} quadros | {time.monotonic() - self.inicio:.1f}s"
+            gravada = "gravada, atualizando" if self.uuid_atual else "abrindo"
+            return f"Tora #{self.numero + 1} em analise ({gravada}) | {len(self.analises)} quadros | {time.monotonic() - self.inicio:.1f}s"
         if self.analises:
             return f"Tora entrando... ({len(self.analises)}/{self.cfg.evento_frames_abrir})"
         return f"Aguardando tora | {self.numero} gravadas"
@@ -2368,7 +2731,7 @@ def main():
     #     rachadura, status) a ~10 fps, reaproveitando as últimas caixas do
     #     YOLO. É o que faz a tela responder na hora; só os nós do modelo
     #     atualizam com atraso.
-    estado = {"frame": None, "analise": None, "yolo": None, "yolo_id": 0}
+    estado = {"frame": None, "analise": None, "yolo": None, "yolo_id": 0, "fundo": None}
     lock = threading.Lock()
     parar = threading.Event()
 
@@ -2407,6 +2770,7 @@ def main():
                     frame = None if estado["frame"] is None else estado["frame"].copy()
                     defeitos_yolo = estado["yolo"]
                     yolo_id = estado["yolo_id"]
+                    fundo = estado["fundo"]
                 if frame is None or defeitos_yolo is None:
                     time.sleep(0.01)
                     continue
@@ -2414,20 +2778,39 @@ def main():
                     a = analisar_frame(
                         frame, None, cfg, persistencia,
                         defeitos_yolo=defeitos_yolo, yolo_novo=(yolo_id != ultimo_yolo_id),
+                        fundo=fundo,
                     )
                     ultimo_yolo_id = yolo_id
 
                     if rastreador is not None:
-                        evento = rastreador.atualizar(a)
+                        fechado = rastreador.atualizar(a)
                         a["hud"].append(rastreador.descricao())
                         with lock:
                             estado["analise"] = a
-                        if evento is not None:
-                            uuid_gerado = salvar_inspecao(
-                                conexao, cfg, evento["indicadores"], evento["defeitos"],
-                                evento["status"], evento["confianca_saude"],
-                            )
-                            print(resumir_analise(uuid_gerado, cfg, evento))
+                        agora = time.monotonic()
+                        if fechado is not None:
+                            # Fechou: última consolidação no MESMO registro.
+                            if fechado.get("uuid_local"):
+                                atualizar_inspecao(conexao, fechado["uuid_local"], fechado["indicadores"], fechado["defeitos"], fechado["status"], fechado["confianca_saude"])
+                                print("🏁 " + resumir_analise(fechado["uuid_local"], cfg, fechado) + " [fechada]")
+                            else:
+                                u = salvar_inspecao(conexao, cfg, fechado["indicadores"], fechado["defeitos"], fechado["status"], fechado["confianca_saude"])
+                                print("🏁 " + resumir_analise(u, cfg, fechado))
+                        elif rastreador.aberto:
+                            parcial = rastreador.parcial()
+                            if parcial is not None and rastreador.uuid_atual is None:
+                                # Abriu: grava JÁ (o sync manda em segundos; o dashboard mostra a tora)
+                                rastreador.uuid_atual = salvar_inspecao(
+                                    conexao, cfg, parcial["indicadores"], parcial["defeitos"],
+                                    parcial["status"], parcial["confianca_saude"],
+                                )
+                                ultima_gravacao = agora
+                                print("🟢 " + resumir_analise(rastreador.uuid_atual, cfg, parcial) + " [aberta]")
+                            elif parcial is not None and agora - ultima_gravacao >= cfg.intervalo_captura_seg:
+                                # Segue na frente da câmera: atualiza o mesmo registro
+                                ultima_gravacao = agora
+                                atualizar_inspecao(conexao, rastreador.uuid_atual, parcial["indicadores"], parcial["defeitos"], parcial["status"], parcial["confianca_saude"])
+                                print("↻ " + resumir_analise(rastreador.uuid_atual, cfg, parcial) + " [atualizada]")
                     else:
                         with lock:
                             estado["analise"] = a
@@ -2459,9 +2842,47 @@ def main():
 
     mostrar = args.simulado or args.gui
     pasta_capturas = Path("./capturas")
+
+    # Fundo de referência automático: só com CÂMERA (num vídeo/pasta o
+    # primeiro frame já tem tora). Junta os frames dos primeiros segundos e
+    # usa a mediana pixel a pixel — robusta a ruído e a alguém passando.
+    fonte_e_camera = not (args.fonte and Path(args.fonte).exists())
+    auto_fundo = fonte_e_camera and cfg.fundo_auto_seg > 0
+    frames_fundo: list = []
+    inicio_captura = time.monotonic()
+
+    miniatura = {"img": None}
+
+    def definir_fundo(imagem: np.ndarray, origem: str) -> None:
+        with lock:
+            estado["fundo"] = imagem
+        # Miniatura para a janela (160 px de largura, proporção do frame)
+        esc = 160.0 / imagem.shape[1]
+        miniatura["img"] = cv2.resize(imagem, (160, max(1, int(imagem.shape[0] * esc))), interpolation=cv2.INTER_AREA)
+        if cfg.fundo_salvar_em:
+            try:
+                Path(cfg.fundo_salvar_em).parent.mkdir(parents=True, exist_ok=True)
+                cv2.imwrite(cfg.fundo_salvar_em, imagem)
+            except Exception:
+                pass
+        print(f"🖼️  Fundo de referência definido ({origem}). A tora passa a ser 'o que difere do fundo'. Tecle 'b' para recapturar.")
+        # Aviso se o quadro parece conter uma peça: o fundo com a peça dentro
+        # faz ela NUNCA ser detectada. Confira na miniatura do canto da janela.
+        try:
+            m_, c_, o_ = segmentar_tora_origem(imagem)
+            parece, _, _ = validar_tora(imagem, m_, c_, o_, cfg)
+        except Exception:
+            parece = False
+        if parece:
+            print("⚠️  ATENÇÃO: parece haver uma tora no quadro capturado como fundo. Se a miniatura no canto mostrar a peça, TIRE a peça e tecle 'b' de novo.")
+
+    if auto_fundo:
+        print(f"🖼️  Capturando o fundo de referência nos primeiros {cfg.fundo_auto_seg:g} s — deixe a garra VAZIA.")
+    elif fonte_e_camera:
+        print("🖼️  Sem fundo de referência. Com a mesa/garra VAZIA na frente da câmera, tecle 'b' na janela (recomendado: funciona em qualquer fundo).")
     print(
         "🚀 Rodando em tempo real. "
-        + ("Tecle 'q' na janela para sair, 's' para salvar o frame em capturas/, ou " if mostrar else "")
+        + ("Tecle 'q' na janela para sair, 'b' para capturar o fundo (garra vazia), 's' para salvar o frame em capturas/, ou " if mostrar else "")
         + "Ctrl+C para parar.\n"
     )
 
@@ -2482,11 +2903,24 @@ def main():
                 estado["frame"] = frame
                 analise = estado["analise"]
 
+            if auto_fundo:
+                if time.monotonic() - inicio_captura <= cfg.fundo_auto_seg:
+                    if len(frames_fundo) < 30:
+                        frames_fundo.append(frame.copy())
+                else:
+                    auto_fundo = False
+                    if frames_fundo:
+                        definir_fundo(np.median(np.stack(frames_fundo), axis=0).astype(np.uint8), f"automático, mediana de {len(frames_fundo)} frames")
+                    frames_fundo = []
+
             if mostrar:
-                cv2.imshow("Omni-Root | John Deere Wood Inspection", desenhar_analise(frame, analise))
+                cv2.imshow("Omni-Root | John Deere Wood Inspection", desenhar_analise(frame, analise, miniatura["img"]))
                 tecla = cv2.waitKey(1) & 0xFF
                 if tecla == ord('q'):
                     break
+                if tecla == ord('b'):
+                    # Fundo de referência manual: garra/mesa VAZIA na frente da câmera.
+                    definir_fundo(frame.copy(), "manual, tecla b")
                 if tecla == ord('s'):
                     # Frame CRU (sem desenho): serve para dataset e para testar
                     # o pipeline offline com `--fonte ./capturas`.

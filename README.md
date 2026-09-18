@@ -121,6 +121,50 @@ indicadores mudam de significado (ver seção 5). Tecle **`s`** para salvar o
 frame cru em `capturas/` (serve para o dataset de eucalipto e para testar
 offline com `--fonte .\capturas`).
 
+**Mesa preta (o cenário da banca) — caminho `fundo_escuro`.** Se a moldura
+do frame é escura (mediana de brilho < 60), a segmentação é por **brilho**:
+madeira de qualquer tom × preto, sem depender de cor da madeira, balanço de
+branco, casca ou descascamento. Limiar = mediana da borda + 35 (a tora pode
+cobrir até metade da borda). Casca muito escura que "morde" o contorno é
+fechada pelo casco convexo (tora é convexa). O cartão do marcador ArUco é
+**excluído** da máscara (num preto ele seria o objeto mais claro). Testado
+com disco, tronco lateral com e sem casca, luz desigual, sombra, peça
+pequena/deslocada, mesa vazia, mão (rejeitada), cartão sozinho (rejeitado).
+Não precisa teclar nada: é automático quando o fundo é escuro. **Recomendação
+para a banca: mesa preta fosca, marcador ArUco na borda do quadro, peça
+apoiada (não na mão).**
+
+**Fundo de referência (tecla `b`) — para fundo claro/estampado.** A
+câmera na garra vê sempre o mesmo fundo; a tora é *o que mudou*. Com a
+mesa/garra **vazia** na frente da câmera, tecle `b`: o frame vira o fundo de
+referência e, a partir daí, a segmentação é por diferença (Lab, com o brilho
+alinhado pela borda para tolerar a auto-exposição da webcam; componente
+convexo mordido vira casco convexo, porque miolo claro pode ter a cor do
+fundo). Funciona em qualquer fundo parado — mesa, lençol estampado, parede.
+Uma **miniatura do fundo capturado** aparece no canto da janela: se a peça
+estiver nela, o fundo está errado — tire a peça e tecle `b` de novo (o
+console também avisa). Mudou a luz ou a câmera? O HUD diz `SEM TORA (fundo
+mudou (tecle b))`. A captura automática ao iniciar existe
+(`fundo_auto_seg`) mas fica **desligada**: iniciar com a peça já na frente da
+câmera a transformava em "fundo" e ela nunca mais era detectada.
+
+Por que isso existe: em casa, sob luz quente, o auto-balanço da webcam deixou
+a madeira clara **da mesma cor** do lençol branco (distância Lab ≈ 4) — nenhum
+critério de cor separa os dois; o fundo de referência separa. Sem fundo
+capturado (ex.: `--fonte pasta`, ou se ninguém teclou `b`), cai na
+segmentação por cor abaixo, que exige fundo neutro (a mesa da faculdade).
+Cópia do fundo capturado: `capturas/fundo_referencia.jpg`.
+
+**Fundo claro (bancada branca da faculdade, papel) — caminho `cor` por
+temperatura.** Numa webcam, papel/parede/bancada brancos saem **frios**
+(azulados: Lab b* 106–112) e madeira sai **quente** (b* 132–142, casca
+138+). Otsu no canal b* separa as duas classes e a tora é a quente; só vale
+quando há contraste quente × frio real (senão a saturação assume, e por
+último o brilho). Foi o que resolveu o "instável" na folha branca: 8/8
+capturas com contorno na casca e casca residual 9–15%. Pele × madeira
+rosada é decidida pelo **vermelho** (Lab a* ≥ 140 e saturação ≤ 130 = pele),
+não pelo matiz — a madeira desta câmera tem o mesmo matiz que pele.
+
 **Portão "isso é madeira?"** — a segmentação sempre acha *algum* blob no
 centro do frame (num teclado ou num notebook também). Antes disso bastar
 para medir e gravar, `validar_tora()` exige: segmentação **pela cor** (o
@@ -232,13 +276,22 @@ de detecção aparecem uma fração de segundo atrás da imagem. O buffer da câ
 fixado em 1 frame para não acumular atraso. Uma quarta thread, opcional, envia
 o frame anotado para o dashboard (câmera ao vivo, seção 3).
 
-**Gravação.** Nesta branch o padrão é `modo_gravacao: "intervalo"`: grava a
-cada `intervalo_captura_seg` **enquanto houver tora no frame** (o portão "é
-madeira?" impede gravar garra vazia ou teclado) — é o que mantém o dashboard
-atualizando a cada 2 s na demo. O modo `"evento"` abaixo fica disponível como
-opção.
+**Gravação: evento incremental (`modo_gravacao: "evento"`, padrão).** A
+tora aparece → em ~0,3 s (4 quadros estáveis) o registro **já é gravado** no
+SQLite e o sync o envia em segundos → enquanto a tora continua na frente da
+câmera, o **mesmo registro** é atualizado a cada `intervalo_captura_seg`
+com os quadros acumulados (mediana/união; o dashboard vê a tora na hora e vê
+os números se refinando — o chip "Ao vivo" não conta atualização como
+inspeção nova) → tirou a tora, para; a última consolidação fecha o registro.
+Console: `🟢 aberta` / `↻ atualizada` / `🏁 fechada`. Resultado: rápido como
+gravar por intervalo, mas **uma tora = um registro**. Do lado do sync isso é
+um UPSERT por `uuid_local` (atualiza a tora, substitui indicadores e
+defeitos), lido num snapshot WAL e marcando como sincronizado só o que foi
+enviado (tora pelo hash, filhos pelos ids) — sem corrida com o `main.py`. O
+trigger do Postgres notifica em INSERT **e** UPDATE. `"intervalo"` (um
+registro novo a cada 2 s enquanto há tora) fica só para comparação.
 
-**Uma tora = um registro (`modo_gravacao: "evento"`, opcional).** Antes, o loop gravava
+**Como o evento decide o que é a mesma tora.** Antes, o loop gravava
 uma inspeção a cada 2 s tivesse tora no frame ou não — uma tora parada 10 s na
 garra virava 5 registros, e garra vazia também gerava linha; o dashboard contava
 "toras", mas eram janelas de 2 s. Agora o `RastreadorTora` transforma a
@@ -300,6 +353,8 @@ Identidade da máquina e do talhão, clone, caminhos, limiares da IA
 | `filtro_area_minima` | Descarta caixas menores que essa fração do frame (`0` desliga). |
 | `filtro_dentro_contorno` | Descarta detecção cujo centro cai fora do contorno da tora. |
 | `filtro_persistencia` | Nº de análises consecutivas em que o defeito precisa aparecer (`1` desliga). |
+| *(mesa preta)* | Sem parâmetro: `segmentar_fundo_escuro` entra sozinho quando a borda do frame é escura. |
+| `fundo_auto_seg` / `fundo_limiar` / `fundo_salvar_em` | Fundo de referência: segundos de captura automática no início (0 = só tecla `b`); distância Lab mínima para "difere do fundo"; onde salvar a cópia. |
 | `tora_exigir_cor`, `tora_solidez_min`, `tora_fracao_pele_max`, `tora_razao_max`, `tora_fracao_madeira_min` | Portão "é madeira?" (seção 3). Reprovou → `SEM TORA`, nada é gravado. |
 | `conf_por_classe` | Limiar de confiança por classe, sobrepondo `conf_threshold`. Padrão: `resin` 0,80, `Live_Knot` 0,70, `Marrow` 0,65, `Quartzity` 0,70 — as classes que o modelo (treinado em madeira serrada) mais confunde com casca e borda de eucalipto. `Crack`/`Dead_Knot` ficam no geral. |
 | `balanco_branco_borda` | Balanço de branco estimado pela borda do frame (fundo). **0 = desligado (padrão)**; ligue (ex. 0.10) só se o fundo do palco sair colorido e a segmentação sofrer — teste antes com `--fonte`. |
