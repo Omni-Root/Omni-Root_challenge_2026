@@ -15,6 +15,8 @@ __pycache__/
 *.db
 *.sqlite
 *.sqlite3
+*.db-wal
+*.db-shm
 
 # Datasets e Imagens brutas (pesadas, não vão pro Git)
 /data/wood_raw/

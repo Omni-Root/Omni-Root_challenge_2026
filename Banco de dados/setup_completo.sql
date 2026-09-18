@@ -205,7 +205,9 @@ ON CONFLICT (clone_id) DO NOTHING;
 -- ============================================================
 -- PARTE 4 — TEMPO REAL (Postgres -> dashboard)
 -- ============================================================
--- A cada tora inserida pelo sync, NOTIFY no canal 'omniroot_toras'. O
+-- A cada tora inserida OU atualizada pelo sync (o evento incremental do
+-- main.py refina o mesmo registro enquanto a tora está na câmera), NOTIFY
+-- no canal 'omniroot_toras'. O
 -- servidor do dashboard fica em LISTEN e repassa aos navegadores por SSE —
 -- a "última inspeção" aparece na tela segundos depois da máquina
 -- sincronizar. Sem o trigger o dashboard cai num polling de 5 s.
@@ -216,6 +218,7 @@ BEGIN
         'omniroot_toras',
         json_build_object(
             'id',            NEW.id,
+            'op',            TG_OP,            -- INSERT (tora nova) ou UPDATE (evento incremental refinou a mesma tora)
             'uuid_local',    NEW.uuid_local,
             'status',        NEW.status_classificacao,
             'maquina_id',    NEW.maquina_id,
@@ -229,7 +232,7 @@ $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_notificar_nova_tora ON toras_inspecionadas;
 CREATE TRIGGER trg_notificar_nova_tora
-    AFTER INSERT ON toras_inspecionadas
+    AFTER INSERT OR UPDATE OF status_classificacao, confianca_ia, hash_sha256 ON toras_inspecionadas
     FOR EACH ROW EXECUTE FUNCTION notificar_nova_tora();
 
 
