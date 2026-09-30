@@ -35,6 +35,8 @@
 --   SELECT COUNT(*) FROM talhoes;           -- 1
 --   SELECT COUNT(*) FROM clones_densidade;  -- 17
 --   SELECT tgname FROM pg_trigger WHERE tgname = 'trg_notificar_nova_tora';
+--   SELECT COUNT(*) FROM information_schema.columns
+--    WHERE table_name = 'toras_inspecionadas' AND column_name LIKE 'pos\_%';  -- 7
 -- ============================================================
 
 
@@ -111,6 +113,27 @@ CREATE TABLE IF NOT EXISTS defeitos_detectados (
     criado_em       TIMESTAMP NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_defeitos_tora ON defeitos_detectados(tora_id);
+
+-- Posição da máquina quando a tora foi gravada (GNSS; ver
+-- omniroot/posicao.py no repositório da máquina). Tudo NULL = tora sem
+-- posição (sem receptor / sem fix) — permitido: ela só não aparece no mapa.
+-- ADD COLUMN IF NOT EXISTS: vale para banco novo E para banco que já tem
+-- dados (acrescenta as colunas vazias, não mexe nas linhas existentes).
+--   pos_fonte: 'gnss_serial'         = GNSS da máquina / receptor em porta serial;
+--              'gnss_log'            = trilha NMEA gravada e reproduzida (demonstração;
+--                                      o dashboard declara isso na tela);
+--              'windows_localizacao' = Localização do Windows (notebook da maquete,
+--                                      estimada por Wi-Fi).
+-- A precisão não é inventada: HDOP e satélites são os que o receptor informou;
+-- pos_precisao_m é o raio de incerteza que o Windows informou.
+ALTER TABLE toras_inspecionadas
+    ADD COLUMN IF NOT EXISTS pos_lat        DOUBLE PRECISION CHECK (pos_lat BETWEEN -90 AND 90),
+    ADD COLUMN IF NOT EXISTS pos_lon        DOUBLE PRECISION CHECK (pos_lon BETWEEN -180 AND 180),
+    ADD COLUMN IF NOT EXISTS pos_hdop       DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS pos_satelites  SMALLINT,
+    ADD COLUMN IF NOT EXISTS pos_fonte      VARCHAR(30),
+    ADD COLUMN IF NOT EXISTS pos_idade_s    DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS pos_precisao_m DOUBLE PRECISION;
 
 
 -- ============================================================

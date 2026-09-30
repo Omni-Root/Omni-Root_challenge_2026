@@ -46,6 +46,9 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
+from omniroot.banco_local import migrar_banco_local
+from omniroot.posicao import LeitorPosicao
+
 # ============================================================
 # CONFIGURAÇÃO GERAL
 # ============================================================
@@ -223,6 +226,25 @@ class Config:
     stream_fps: float = 4.0              # quadros por segundo enviados (banda ~ 40 KB x fps)
     stream_largura_px: int = 640         # reduz o frame antes de codificar (0 = tamanho original)
     stream_jpeg_qualidade: int = 70      # 1-100
+
+    # --- Posição da máquina (GNSS), ver omniroot/posicao.py ---
+    # Cada tora é gravada com a posição do momento em que o evento ABRE (o
+    # corte). Sem fonte configurada, sem satélite ou com leitura mais velha
+    # que `gnss_validade_s`, a tora é gravada normalmente, só sem posição.
+    #   gnss_porta: porta serial NMEA — o GNSS da máquina ou um receptor USB
+    #               ("COM5" no Windows). Precisa do pacote pyserial.
+    #   gnss_arquivo: trilha NMEA REAL gravada antes, reproduzida em loop
+    #               (plano de demonstração; gravada como pos_fonte "gnss_log",
+    #               e o dashboard declara isso). Tem prioridade sobre a porta.
+    #   gnss_porta = "windows": Localização do Windows — o notebook da maquete
+    #               fazendo o papel da máquina (estimada por Wi-Fi, precisão de
+    #               dezenas de metros; gravada como "windows_localizacao").
+    # Ambos vazios desliga. `--gnss COM5`, `--gnss trilha.nmea` ou
+    # `--gnss windows` sobrescreve.
+    gnss_porta: str = ""
+    gnss_baud: int = 9600                # padrão da maioria dos receptores (alguns usam 4800)
+    gnss_arquivo: str = ""
+    gnss_validade_s: float = 5.0         # posição mais velha que isso não é "a posição atual"
 
 
 # ============================================================
@@ -1786,7 +1808,29 @@ def conectar_banco(cfg: Config) -> sqlite3.Connection:
         if schema_path.exists():
             with open(schema_path, "r", encoding="utf-8") as f:
                 conexao.executescript(f.read())
+    # Banco criado antes das colunas de posição: acrescenta (ver omniroot/banco_local.py).
+    migrar_banco_local(conexao)
     return conexao
+
+
+# Campos da posição (dict de LeitorPosicao.atual) na ordem das colunas pos_*
+# de toras_local: "lat" -> pos_lat etc.
+CAMPOS_POSICAO = ("lat", "lon", "hdop", "satelites", "fonte", "idade_s", "precisao_m")
+
+
+def _hash_inspecao(uuid_local: str, log_id: str, indicadores: dict, defeitos: list,
+                   status: str, posicao: dict | None) -> str:
+    """Hash de integridade da tora. A posição entra quando existe (sem posição, o hash é o de antes)."""
+    dados = {
+        "uuid_local": uuid_local,
+        "log_id": log_id,
+        "indicadores": indicadores,
+        "defeitos": defeitos,
+        "status": status,
+    }
+    if posicao is not None:
+        dados["posicao"] = {k: posicao.get(k) for k in CAMPOS_POSICAO}
+    return gerar_hash_sha256(dados)
 
 
 def salvar_inspecao(
@@ -1797,32 +1841,34 @@ def salvar_inspecao(
     status_classificacao: str,
     confianca_media: float,
     uuid_local: str | None = None,
+    posicao: dict | None = None,
 ) -> str:
-    """Grava a tora + indicadores + defeitos nas 3 tabelas locais. `uuid_local` fixo permite atualizar depois."""
+    """
+    Grava a tora + indicadores + defeitos nas 3 tabelas locais. `uuid_local`
+    fixo permite atualizar depois. `posicao` (de LeitorPosicao.atual) é a
+    posição da máquina no momento da gravação; None = tora sem posição.
+    """
     cursor = conexao.cursor()
 
     uuid_local = uuid_local or str(uuid.uuid4())
     log_id = f"LOG-{datetime.now():%Y%m%d%H%M%S}-{uuid_local[:4]}"
     data_inspecao = datetime.now().isoformat(timespec="seconds")
 
-    hash_dados = gerar_hash_sha256({
-        "uuid_local": uuid_local,
-        "log_id": log_id,
-        "indicadores": indicadores,
-        "defeitos": defeitos,
-        "status": status_classificacao,
-    })
+    hash_dados = _hash_inspecao(uuid_local, log_id, indicadores, defeitos, status_classificacao, posicao)
+    p = posicao or {}
 
     # --- 1. Insere a tora ---
     cursor.execute(
-        """
+        f"""
         INSERT INTO toras_local
             (uuid_local, maquina_id, talhao_id, log_id, data_inspecao,
-             confianca_ia, status_classificacao, hash_sha256, sync_status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+             confianca_ia, status_classificacao, hash_sha256, sync_status,
+             {", ".join("pos_" + c for c in CAMPOS_POSICAO)})
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, {", ".join("?" for _ in CAMPOS_POSICAO)})
         """,
         (uuid_local, cfg.maquina_id, cfg.talhao_id, log_id, data_inspecao,
-         confianca_media, status_classificacao, hash_dados),
+         confianca_media, status_classificacao, hash_dados,
+         *(p.get(c) for c in CAMPOS_POSICAO)),
     )
     tora_id_local = cursor.lastrowid
 
@@ -1867,19 +1913,21 @@ def atualizar_inspecao(
     defeitos pelos consolidados até agora, recalcula o hash e volta
     sync_status para 0 — o sync_daemon reenvia e o Postgres é atualizado
     (UPSERT por uuid_local). Devolve False se o uuid não existe.
+    A posição NÃO muda: é a do momento em que a tora foi gravada (o corte).
     """
     cursor = conexao.cursor()
-    linha = cursor.execute("SELECT id, log_id FROM toras_local WHERE uuid_local = ?", (uuid_local,)).fetchone()
+    linha = cursor.execute(
+        f"SELECT id, log_id, {', '.join('pos_' + c for c in CAMPOS_POSICAO)} "
+        "FROM toras_local WHERE uuid_local = ?",
+        (uuid_local,),
+    ).fetchone()
     if linha is None:
         return False
     tora_id, log_id = linha[0], linha[1]
-    hash_dados = gerar_hash_sha256({
-        "uuid_local": uuid_local,
-        "log_id": log_id,
-        "indicadores": indicadores,
-        "defeitos": defeitos,
-        "status": status_classificacao,
-    })
+    posicao = None
+    if linha[2] is not None and linha[3] is not None:
+        posicao = dict(zip(CAMPOS_POSICAO, linha[2:]))
+    hash_dados = _hash_inspecao(uuid_local, log_id, indicadores, defeitos, status_classificacao, posicao)
     cursor.execute(
         "UPDATE toras_local SET confianca_ia = ?, status_classificacao = ?, hash_sha256 = ?, sync_status = 0 WHERE id = ?",
         (confianca_media, status_classificacao, hash_dados, tora_id),
@@ -2168,6 +2216,13 @@ def resumir_analise(uuid_gerado: str, cfg: Config, a: dict) -> str:
         f"massa={ind['massa_seca']['valor']}kg defeitos={len(a['defeitos'])} {resumo_defeito}"
         + (f" [ignorados={len(a['descartados'])}]" if a["descartados"] else "")
     )
+
+
+def descrever_posicao(posicao: dict | None) -> str:
+    """Sufixo do log do console com a posição gravada na tora (vazio sem posição)."""
+    if posicao is None:
+        return " [sem posição]"
+    return f" [pos {posicao['lat']:.5f},{posicao['lon']:.5f} {posicao['fonte']}]"
 
 
 def desenhar_analise(frame: np.ndarray, a: dict | None, miniatura_fundo: "np.ndarray | None" = None) -> np.ndarray:
@@ -2693,6 +2748,12 @@ def main():
         "--idade", type=float, default=None,
         help="Sobrescreve a Idade do talhão em anos na colheita (ex: 5.3)"
     )
+    parser.add_argument(
+        "--gnss", type=str, nargs="?", const="windows", default=None,
+        help="Fonte de posição: porta serial NMEA (ex: COM5), arquivo .nmea gravado, ou 'windows' "
+             "(Localização do Windows, no notebook da maquete; é o que `--gnss` sozinho usa). "
+             "Sobrescreve o config.json"
+    )
     args = parser.parse_args()
 
     cfg = carregar_configuracao_json(args.config_file)
@@ -2700,6 +2761,23 @@ def main():
         cfg.clone_id = args.clone
     if args.idade is not None:
         cfg.idade_talhao_anos = args.idade
+    if args.gnss is not None:
+        if args.gnss.strip().lower() != "windows" and Path(args.gnss).is_file():
+            cfg.gnss_arquivo, cfg.gnss_porta = args.gnss, ""
+        else:
+            cfg.gnss_arquivo, cfg.gnss_porta = "", args.gnss
+
+    # Posição (GNSS): thread própria; a inspeção só lê a última posição válida.
+    origem_gnss = (cfg.gnss_arquivo or cfg.gnss_porta or "").strip()
+    if cfg.gnss_arquivo and not Path(cfg.gnss_arquivo).is_file():
+        print(f"⚠️  gnss_arquivo '{cfg.gnss_arquivo}' não encontrado — toras serão gravadas sem posição.")
+        origem_gnss = ""
+    leitor_gnss = LeitorPosicao(origem_gnss, cfg.gnss_baud).iniciar() if origem_gnss else None
+    if leitor_gnss is None:
+        print("ℹ️  Sem fonte de posição (gnss_porta/gnss_arquivo vazios): toras gravadas sem posição.")
+
+    def posicao_atual() -> dict | None:
+        return leitor_gnss.atual(cfg.gnss_validade_s) if leitor_gnss is not None else None
 
     print("📦 Carregando modelo IA...")
     modelo = carregar_modelo(cfg)
@@ -2782,6 +2860,9 @@ def main():
                     )
                     ultimo_yolo_id = yolo_id
 
+                    if leitor_gnss is not None:
+                        a["hud"].append(leitor_gnss.descricao(cfg.gnss_validade_s))
+
                     if rastreador is not None:
                         fechado = rastreador.atualizar(a)
                         a["hud"].append(rastreador.descricao())
@@ -2794,18 +2875,20 @@ def main():
                                 atualizar_inspecao(conexao, fechado["uuid_local"], fechado["indicadores"], fechado["defeitos"], fechado["status"], fechado["confianca_saude"])
                                 print("🏁 " + resumir_analise(fechado["uuid_local"], cfg, fechado) + " [fechada]")
                             else:
-                                u = salvar_inspecao(conexao, cfg, fechado["indicadores"], fechado["defeitos"], fechado["status"], fechado["confianca_saude"])
+                                u = salvar_inspecao(conexao, cfg, fechado["indicadores"], fechado["defeitos"], fechado["status"], fechado["confianca_saude"], posicao=posicao_atual())
                                 print("🏁 " + resumir_analise(u, cfg, fechado))
                         elif rastreador.aberto:
                             parcial = rastreador.parcial()
                             if parcial is not None and rastreador.uuid_atual is None:
-                                # Abriu: grava JÁ (o sync manda em segundos; o dashboard mostra a tora)
+                                # Abriu: grava JÁ (o sync manda em segundos; o dashboard mostra a tora).
+                                # A posição é a DESTE momento (o corte); as atualizações não a mudam.
+                                posicao = posicao_atual()
                                 rastreador.uuid_atual = salvar_inspecao(
                                     conexao, cfg, parcial["indicadores"], parcial["defeitos"],
-                                    parcial["status"], parcial["confianca_saude"],
+                                    parcial["status"], parcial["confianca_saude"], posicao=posicao,
                                 )
                                 ultima_gravacao = agora
-                                print("🟢 " + resumir_analise(rastreador.uuid_atual, cfg, parcial) + " [aberta]")
+                                print("🟢 " + resumir_analise(rastreador.uuid_atual, cfg, parcial) + " [aberta]" + descrever_posicao(posicao))
                             elif parcial is not None and agora - ultima_gravacao >= cfg.intervalo_captura_seg:
                                 # Segue na frente da câmera: atualiza o mesmo registro
                                 ultima_gravacao = agora
@@ -2819,7 +2902,8 @@ def main():
                         if a.get("eh_tora", True) and agora - ultima_gravacao >= cfg.intervalo_captura_seg:
                             ultima_gravacao = agora
                             uuid_gerado = salvar_inspecao(
-                                conexao, cfg, a["indicadores"], a["defeitos"], a["status"], a["confianca_saude"]
+                                conexao, cfg, a["indicadores"], a["defeitos"], a["status"], a["confianca_saude"],
+                                posicao=posicao_atual(),
                             )
                             print(resumir_analise(uuid_gerado, cfg, a))
                 except Exception as e:
@@ -2938,6 +3022,8 @@ def main():
         parar.set()
         for t in threads:
             t.join(timeout=2.0)
+        if leitor_gnss is not None:
+            leitor_gnss.parar()
         captura.release()
         cv2.destroyAllWindows()
         print("✅ Recursos liberados. Até a próxima inspeção!")
