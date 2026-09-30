@@ -49,6 +49,12 @@ import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
 
+from omniroot.banco_local import COLUNAS_POSICAO, migrar_banco_local
+
+# Colunas de posição da tora (GNSS), na ordem usada em todo o arquivo. Mesmos
+# nomes no SQLite (toras_local) e no Postgres (toras_inspecionadas).
+POSICAO = list(COLUNAS_POSICAO)
+
 
 # ============================================================
 # CONFIGURAÇÃO
@@ -124,8 +130,16 @@ def sincronizar_bancos(cfg: Config) -> None:
         import sqlite3
         sqlite_conn = sqlite3.connect(cfg.sqlite_path)
         sqlite_conn.row_factory = sqlite3.Row
+        # WAL: este leitor não bloqueia o main.py escrevendo, e um BEGIN aqui
+        # dá um snapshot consistente de tora + filhos (ver sincronizar_tora).
+        sqlite_conn.execute("PRAGMA journal_mode=WAL")
 
         try:
+            # Banco local criado antes das colunas de posição: acrescenta
+            # (a mesma migração que o main.py faz; tanto faz quem sobe antes).
+            migrar_banco_local(sqlite_conn)
+            com_posicao = postgres_tem_posicao(pg_conn)
+
             toras = buscar_toras_pendentes(sqlite_conn)
 
             if not toras:
@@ -135,7 +149,7 @@ def sincronizar_bancos(cfg: Config) -> None:
             processadas = 0
             for tora in toras:
                 try:
-                    sincronizar_tora(pg_conn, sqlite_conn, tora)
+                    sincronizar_tora(pg_conn, sqlite_conn, tora, com_posicao)
                     processadas += 1
                 except Exception as e:
                     print(f"❌ Erro ao sincronizar tora {tora['uuid_local']}: {e}")
@@ -229,10 +243,56 @@ def baixar_tabela_densidade(pg_conn, caminho_cache: str) -> None:
     temporario = destino.with_suffix(".json.tmp")
     with open(temporario, "w", encoding="utf-8") as f:
         json.dump(dados, f, ensure_ascii=False, indent=2)
-    temporario.replace(destino)
+    # No Windows o replace falha se o main.py estiver lendo o arquivo nesse
+    # exato instante (recarga automática): tenta de novo por até ~0,5 s.
+    for tentativa in range(10):
+        try:
+            temporario.replace(destino)
+            break
+        except PermissionError:
+            if tentativa == 9:
+                raise
+            time.sleep(0.05)
 
     resumo = ", ".join(f"{qtd} {tipo}" for tipo, qtd in sorted(contagem_por_tipo.items()))
     print(f"📥 Tabela de densidade atualizada: {len(linhas)} clones ({resumo}).")
+
+
+_AVISOU_POSTGRES_SEM_POSICAO = False
+
+
+def postgres_tem_posicao(pg_conn) -> bool:
+    """
+    O Postgres central já tem as colunas de posição? Se não (setup_completo.sql
+    antigo), as toras seguem sendo enviadas SEM posição — o sync nunca trava
+    por causa disso — e o aviso sai uma vez. A posição continua guardada no
+    SQLite até a tora ser sincronizada.
+    """
+    global _AVISOU_POSTGRES_SEM_POSICAO
+    cursor = pg_conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT COUNT(*) FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'toras_inspecionadas'
+              AND column_name = ANY(%s)
+            """,
+            (POSICAO,),
+        )
+        tem = cursor.fetchone()[0] == len(POSICAO)
+    finally:
+        cursor.close()
+    pg_conn.commit()  # fecha a transação implícita da consulta
+    if not tem and not _AVISOU_POSTGRES_SEM_POSICAO:
+        _AVISOU_POSTGRES_SEM_POSICAO = True
+        print(
+            "⚠️  O Postgres central não tem as colunas de posição (pos_*): as toras vão SEM posição. "
+            "Aplique o 'Banco de dados/setup_completo.sql' de novo (é idempotente) para o mapa funcionar."
+        )
+    elif tem:
+        _AVISOU_POSTGRES_SEM_POSICAO = False
+    return tem
 
 
 def buscar_toras_pendentes(sqlite_conn) -> list:
@@ -247,35 +307,67 @@ def buscar_toras_pendentes(sqlite_conn) -> list:
     return cursor.fetchall()
 
 
-def sincronizar_tora(pg_conn, sqlite_conn, tora) -> None:
+def sincronizar_tora(pg_conn, sqlite_conn, tora, com_posicao: bool = True) -> None:
     """
     Sincroniza uma tora inteira (registro + indicadores + defeitos) numa
     única transação Postgres. Se qualquer parte falhar, dá rollback --
     nada fica marcado como sincronizado no SQLite (fica pendente pro
     próximo ciclo).
     """
+    # --- Snapshot local consistente ---
+    # O main.py (evento incremental) pode atualizar esta tora a qualquer
+    # momento: tora, indicadores e defeitos trocam juntos numa transação.
+    # Lê-se tudo dentro de UM BEGIN (WAL => snapshot) para nunca mandar a
+    # tora de uma versão com os filhos de outra. Guarda-se o hash da tora e
+    # os ids dos filhos lidos: só ISSO é marcado como sincronizado depois.
+    sqlite_conn.execute("BEGIN")
+    try:
+        atual = sqlite_conn.execute(
+            f"""
+            SELECT id, uuid_local, maquina_id, talhao_id, log_id,
+                   data_inspecao, confianca_ia, status_classificacao, hash_sha256, sync_status,
+                   {', '.join(POSICAO)}
+            FROM toras_local WHERE id = ?
+            """,
+            (tora["id"],),
+        ).fetchone()
+        if atual is None or atual["sync_status"] != 0:
+            sqlite_conn.commit()
+            return
+        tora = atual
+        indicadores = buscar_indicadores_pendentes(sqlite_conn, tora["id"])
+        defeitos = buscar_defeitos_pendentes(sqlite_conn, tora["id"])
+    finally:
+        sqlite_conn.commit()  # fecha o snapshot antes de falar com a rede
+
     pg_cursor = pg_conn.cursor()
     try:
-        tora_remota_id, criada_agora = inserir_ou_buscar_tora(pg_cursor, tora)
+        tora_remota_id, criada_agora = inserir_ou_buscar_tora(pg_cursor, tora, com_posicao)
 
-        # Se a tora JÁ existia no Postgres (retry após queda entre o commit
-        # remoto e a marcação local), os filhos provavelmente também já
-        # estão lá -- reinserir duplicaria indicadores e defeitos. Nesse
-        # caso só completamos o que faltar: se já há qualquer indicador
-        # remoto para essa tora, consideramos o registro inteiro enviado
-        # (o commit é atômico: ou entrou tudo, ou nada).
+        # Se a tora JÁ existia no Postgres, é uma ATUALIZAÇÃO (evento
+        # incremental do main.py: o mesmo registro é refinado enquanto a
+        # tora está na frente da câmera) -- ou um retry após queda de rede.
+        # Nos dois casos a versão local é a mais nova: atualiza a tora e
+        # substitui indicadores e defeitos. Idempotente e atômico (uma
+        # transação): rodar duas vezes dá o mesmo resultado.
         if not criada_agora:
+            # A posição não muda no main.py (é a do corte), mas vai junto:
+            # cobre a tora que subiu antes de o Postgres ter as colunas.
+            set_pos = "".join(f", {c} = %s" for c in POSICAO) if com_posicao else ""
+            valores_pos = [tora[c] for c in POSICAO] if com_posicao else []
             pg_cursor.execute(
-                "SELECT COUNT(*) FROM indicadores_qualidade WHERE tora_id = %s",
-                (tora_remota_id,),
+                f"""
+                UPDATE toras_inspecionadas
+                   SET confianca_ia = %s, status_classificacao = %s, hash_sha256 = %s,
+                       data_sincronizacao = now(){set_pos}
+                 WHERE id = %s
+                """,
+                (tora["confianca_ia"], tora["status_classificacao"], tora["hash_sha256"], *valores_pos, tora_remota_id),
             )
-            if pg_cursor.fetchone()[0] > 0:
-                print(f"↩️  Tora {tora['uuid_local'][:8]} já estava completa no Postgres — só marcando como sincronizada.")
-                marcar_sincronizada(sqlite_conn, tora["id"])
-                return
+            pg_cursor.execute("DELETE FROM indicadores_qualidade WHERE tora_id = %s", (tora_remota_id,))
+            pg_cursor.execute("DELETE FROM defeitos_detectados WHERE tora_id = %s", (tora_remota_id,))
 
-        # --- indicadores de qualidade ---
-        indicadores = buscar_indicadores_pendentes(sqlite_conn, tora["id"])
+        # --- indicadores de qualidade (do snapshot) ---
         for ind in indicadores:
             pg_cursor.execute(
                 """
@@ -286,8 +378,7 @@ def sincronizar_tora(pg_conn, sqlite_conn, tora) -> None:
                 (tora_remota_id, ind["tipo_indicador"], ind["valor"], ind["unidade"], ind["metodo_medicao"]),
             )
 
-        # --- defeitos detectados ---
-        defeitos = buscar_defeitos_pendentes(sqlite_conn, tora["id"])
+        # --- defeitos detectados (do snapshot) ---
         for d in defeitos:
             pg_cursor.execute(
                 """
@@ -303,8 +394,13 @@ def sincronizar_tora(pg_conn, sqlite_conn, tora) -> None:
 
         # Só agora marca como sincronizado no SQLite local (banco separado,
         # não entra na transação do Postgres -- por isso a ordem importa:
-        # só marcamos local depois que o commit remoto já foi confirmado)
-        marcar_sincronizada(sqlite_conn, tora["id"])
+        # só marcamos local depois que o commit remoto já foi confirmado).
+        # E só o que foi LIDO: se o main.py atualizou a tora nesse meio
+        # tempo, o hash mudou e ela continua pendente para o próximo ciclo.
+        marcar_sincronizada(
+            sqlite_conn, tora["id"], tora["hash_sha256"],
+            [i["id"] for i in indicadores], [d["id"] for d in defeitos],
+        )
 
     except Exception:
         pg_conn.rollback()
@@ -313,24 +409,37 @@ def sincronizar_tora(pg_conn, sqlite_conn, tora) -> None:
         pg_cursor.close()
 
 
-def marcar_sincronizada(sqlite_conn, tora_id_local: int) -> None:
-    """Marca a tora e seus filhos como sync_status = 1 no SQLite local."""
-    sqlite_conn.execute(
-        "UPDATE indicadores_qualidade_local SET sync_status = 1 WHERE tora_id = ? AND sync_status = 0",
-        (tora_id_local,),
-    )
-    sqlite_conn.execute(
-        "UPDATE defeitos_detectados_local SET sync_status = 1 WHERE tora_id = ? AND sync_status = 0",
-        (tora_id_local,),
-    )
-    sqlite_conn.execute(
-        "UPDATE toras_local SET sync_status = 1 WHERE id = ?",
-        (tora_id_local,),
-    )
+def marcar_sincronizada(sqlite_conn, tora_id_local: int, hash_enviado: str | None = None,
+                        ids_indicadores: list | None = None, ids_defeitos: list | None = None) -> None:
+    """
+    Marca como sync_status = 1 EXATAMENTE o que foi enviado: os filhos pelos
+    ids lidos no snapshot e a tora só se o hash ainda for o enviado (se o
+    main.py atualizou no meio, o hash mudou e a tora segue pendente — o
+    próximo ciclo manda a versão nova). Sem hash/ids (chamada antiga),
+    marca tudo.
+    """
+    if ids_indicadores is None:
+        sqlite_conn.execute("UPDATE indicadores_qualidade_local SET sync_status = 1 WHERE tora_id = ? AND sync_status = 0", (tora_id_local,))
+    elif ids_indicadores:
+        sqlite_conn.execute(
+            f"UPDATE indicadores_qualidade_local SET sync_status = 1 WHERE id IN ({','.join('?' * len(ids_indicadores))})",
+            ids_indicadores,
+        )
+    if ids_defeitos is None:
+        sqlite_conn.execute("UPDATE defeitos_detectados_local SET sync_status = 1 WHERE tora_id = ? AND sync_status = 0", (tora_id_local,))
+    elif ids_defeitos:
+        sqlite_conn.execute(
+            f"UPDATE defeitos_detectados_local SET sync_status = 1 WHERE id IN ({','.join('?' * len(ids_defeitos))})",
+            ids_defeitos,
+        )
+    if hash_enviado is None:
+        sqlite_conn.execute("UPDATE toras_local SET sync_status = 1 WHERE id = ?", (tora_id_local,))
+    else:
+        sqlite_conn.execute("UPDATE toras_local SET sync_status = 1 WHERE id = ? AND hash_sha256 = ?", (tora_id_local, hash_enviado))
     sqlite_conn.commit()
 
 
-def inserir_ou_buscar_tora(pg_cursor, tora) -> tuple[int, bool]:
+def inserir_ou_buscar_tora(pg_cursor, tora, com_posicao: bool = True) -> tuple[int, bool]:
     """
     Insere a tora no Postgres. Se uuid_local já existir (retry após queda
     de rede no meio de uma sincronização anterior), busca o id já existente
@@ -338,13 +447,17 @@ def inserir_ou_buscar_tora(pg_cursor, tora) -> tuple[int, bool]:
 
     Devolve (id_remoto, criada_agora). `criada_agora=False` significa que
     a tora já estava lá e o chamador deve evitar duplicar os filhos.
+    `com_posicao=False`: o Postgres ainda não tem as colunas pos_* — envia sem.
     """
+    colunas_pos = "".join(f", {c}" for c in POSICAO) if com_posicao else ""
+    marcadores_pos = ", %s" * len(POSICAO) if com_posicao else ""
+    valores_pos = [tora[c] for c in POSICAO] if com_posicao else []
     pg_cursor.execute(
-        """
+        f"""
         INSERT INTO toras_inspecionadas
             (uuid_local, maquina_id, talhao_id, log_id, data_inspecao,
-             confianca_ia, status_classificacao, hash_sha256)
-        SELECT %s, m.id_maquina, t.id_talhao, %s, %s, %s, %s, %s
+             confianca_ia, status_classificacao, hash_sha256{colunas_pos})
+        SELECT %s, m.id_maquina, t.id_talhao, %s, %s, %s, %s, %s{marcadores_pos}
         FROM maquinas m
         LEFT JOIN talhoes t ON t.nome = %s
         WHERE m.numero_serie = %s
@@ -354,6 +467,7 @@ def inserir_ou_buscar_tora(pg_cursor, tora) -> tuple[int, bool]:
         (
             tora["uuid_local"], tora["log_id"], tora["data_inspecao"],
             tora["confianca_ia"], tora["status_classificacao"], tora["hash_sha256"],
+            *valores_pos,
             tora["talhao_id"], tora["maquina_id"],
         ),
     )

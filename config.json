@@ -26,5 +26,6 @@
   "stream_url": "http://localhost:3001/api/camera/frame",
   "stream_fps": 4.0,
   "stream_largura_px": 640,
-  "stream_jpeg_qualidade": 70
+  "stream_jpeg_qualidade": 70,
+  "gnss_porta": "windows"
 }
