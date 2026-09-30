@@ -47,6 +47,7 @@ import numpy as np
 from ultralytics import YOLO
 
 from omniroot.banco_local import migrar_banco_local
+from omniroot.luz import RealceLuz, descrever_luz
 from omniroot.posicao import LeitorPosicao
 
 # ============================================================
@@ -245,6 +246,19 @@ class Config:
     gnss_baud: int = 9600                # padrão da maioria dos receptores (alguns usam 4800)
     gnss_arquivo: str = ""
     gnss_validade_s: float = 5.0         # posição mais velha que isso não é "a posição atual"
+
+    # --- Pouca luz / operação noturna, ver omniroot/luz.py ---
+    # Mede brilho e ruído de cada quadro; em luz BAIXA empilha quadros da
+    # tora parada e aplica ganho que preserva a cor; em luz INSUFICIENTE não
+    # mede. Nada disso retreina o modelo. Os limiares são ponto de partida:
+    # o HUD mostra brilho/ruído medidos — calibrem apagando a luz da bancada.
+    luz_realce: bool = True
+    luz_limiar_boa: float = 90.0            # brilho (percentil 95, 0-255) mínimo de luz "boa"
+    luz_limiar_insuficiente: float = 20.0   # abaixo disso: não mede (sintético: o realce ainda acha a tora em ~15)
+    luz_ruido_baixa: float = 6.0            # ruído acima disso conta como luz baixa
+    luz_ruido_insuficiente: float = 16.0    # ruído acima disso: não mede
+    luz_ganho_max: float = 4.0
+    luz_empilhar_max: int = 8               # quadros da tora parada somados (ruído cai ~raiz de N)
 
 
 # ============================================================
@@ -2420,6 +2434,20 @@ def consolidar_evento(analises: list[dict], cfg: Config) -> dict:
         "massa_seca": {"valor": massa_seca_kg, "unidade": "kg", "metodo": f"volume_x_densidade_clone_{cfg.clone_id}"},
         "apodrecimento_pragas": {"valor": round(confianca_saude * 100, 2), "unidade": "%", "metodo": "yolo_severidade"},
     }
+
+    # Proveniência da luz (ver omniroot/luz.py): se a maior parte dos quadros
+    # foi em luz baixa (realçada), os indicadores MEDIDOS NA IMAGEM carregam
+    # "_luz_baixa" no método — quem lê o dado sabe em que condição ele saiu.
+    # Não toca no que não vem da imagem (densidade, comprimento de traçamento,
+    # tortuosidade não aplicável).
+    niveis_luz = [a.get("luz", "boa") for a in analises]
+    luz = "baixa" if niveis_luz.count("baixa") * 2 > len(niveis_luz) else "boa"
+    if luz == "baixa":
+        for chave in ("diametro", "altura", "tortuosidade", "porcentagem_casca"):
+            metodo = indicadores[chave]["metodo"]
+            if metodo not in ("comprimento_tracamento_config", "nao_aplicavel_secao"):
+                indicadores[chave]["metodo"] = metodo + "_luz_baixa"
+
     return {
         "status": status,
         "confianca_saude": confianca_saude,
@@ -2429,6 +2457,7 @@ def consolidar_evento(analises: list[dict], cfg: Config) -> dict:
         "vista": vista,
         "quadros": len(analises),
         "quadros_laterais": len(laterais),
+        "luz": luz,
     }
 
 
@@ -2809,7 +2838,21 @@ def main():
     #     rachadura, status) a ~10 fps, reaproveitando as últimas caixas do
     #     YOLO. É o que faz a tela responder na hora; só os nós do modelo
     #     atualizam com atraso.
-    estado = {"frame": None, "analise": None, "yolo": None, "yolo_id": 0, "fundo": None}
+    estado = {"frame": None, "analise": None, "yolo": None, "yolo_id": 0, "fundo": None, "luz": None}
+
+    # Pouca luz: medido e realçado na captura, ANTES de tudo — o modelo, a
+    # visão clássica, o fundo de referência e a câmera ao vivo recebem o
+    # mesmo quadro. Ver omniroot/luz.py.
+    realce = RealceLuz(
+        ligado=cfg.luz_realce,
+        limiar_boa=cfg.luz_limiar_boa,
+        limiar_insuficiente=cfg.luz_limiar_insuficiente,
+        ruido_baixa=cfg.luz_ruido_baixa,
+        ruido_insuficiente=cfg.luz_ruido_insuficiente,
+        ganho_max=cfg.luz_ganho_max,
+        empilhar_max=cfg.luz_empilhar_max,
+    )
+    ultimo_nivel_luz = {"v": None}
     lock = threading.Lock()
     parar = threading.Event()
 
@@ -2849,6 +2892,7 @@ def main():
                     defeitos_yolo = estado["yolo"]
                     yolo_id = estado["yolo_id"]
                     fundo = estado["fundo"]
+                    luz = estado.get("luz")
                 if frame is None or defeitos_yolo is None:
                     time.sleep(0.01)
                     continue
@@ -2859,6 +2903,20 @@ def main():
                         fundo=fundo,
                     )
                     ultimo_yolo_id = yolo_id
+
+                    # Luz do quadro analisado (medida na captura, ver omniroot/luz.py).
+                    a["luz"] = luz["nivel"] if luz else "boa"
+                    if a["luz"] == "insuficiente" and a.get("eh_tora", True):
+                        # Não mede: sem tora para o rastreador (nenhum evento
+                        # abre, nada é gravado) e nenhum número na tela.
+                        a["eh_tora"] = False
+                        a["motivo_sem_tora"] = "luz insuficiente"
+                        a["status"] = "sem_tora"
+                        a["defeitos"] = []
+                        a["descartados"] = []
+                        a["hud"][0] = f"SEM MEDIDA (luz insuficiente - ilumine a tora) | Clone: {cfg.clone_id}"
+                    if luz is not None:
+                        a["hud"].append(descrever_luz(luz))
 
                     if leitor_gnss is not None:
                         a["hud"].append(leitor_gnss.descricao(cfg.gnss_validade_s))
@@ -2982,9 +3040,27 @@ def main():
                 time.sleep(0.1)
                 continue
 
+            frame = realce.processar(frame)
+            if realce.ligado:
+                # Console: avisa só quando o nível MUDA e fica estável por 1,5 s.
+                # Mesa preta com a garra vazia é uma cena escura mesmo com a sala
+                # clara — sem isso o console piscava "insuficiente/baixa" a cada
+                # tora que entra e sai. (A medição usa o nível na hora, sempre.)
+                agora_luz = time.monotonic()
+                if realce.nivel != ultimo_nivel_luz.get("candidato"):
+                    ultimo_nivel_luz["candidato"] = realce.nivel
+                    ultimo_nivel_luz["desde"] = agora_luz
+                elif realce.nivel != ultimo_nivel_luz["v"] and agora_luz - ultimo_nivel_luz["desde"] >= 1.5:
+                    e = realce.estado
+                    print(f"💡 Luz {e['nivel'].upper()} (brilho {e['brilho']:.0f}, ruído {e['ruido']:.1f})"
+                          + (" — realce ligado: empilhamento + ganho" if e["nivel"] == "baixa" else "")
+                          + (" — se houver tora, NÃO mede até iluminar" if e["nivel"] == "insuficiente" else ""))
+                    ultimo_nivel_luz["v"] = realce.nivel
+
             # Publica o frame mais recente para o worker e pega o último resultado.
             with lock:
                 estado["frame"] = frame
+                estado["luz"] = realce.estado
                 analise = estado["analise"]
 
             if auto_fundo:
