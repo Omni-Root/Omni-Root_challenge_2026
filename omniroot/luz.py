@@ -10,9 +10,16 @@ análise, cada quadro passa por:
   1. MEDIDOR DE LUZ — dois números por quadro:
        brilho: percentil 95 do cinza (a parte mais clara da cena: sobre a
                mesa preta/garra, é a madeira iluminada, não o fundo);
-       ruido:  desvio do ruído do sensor (método de Immerkær, 1996) — câmera
-               no escuro sobe o ganho sozinha e a imagem "clara" vem granulada.
-     -> nível "boa" / "baixa" / "critica" (com histerese, para não piscar).
+       ruido:  desvio do ruído do sensor — câmera no escuro sobe o ganho
+               sozinha e a imagem "clara" vem granulada. Medido no TEMPO
+               (diferença entre dois quadros seguidos), não no espaço: a
+               câmera é fixa, então textura (pano estampado, anéis da
+               madeira) se repete igual de um quadro para o outro e se
+               anula; só o ruído muda. O estimador espacial de Immerkær
+               (medir_luz) lia textura como ruído: com luz boa e fundo
+               estampado dava 6,4 (> limiar 6) e ligava o realce à toa.
+     -> nível "boa" / "baixa" / "critica" (com histerese no brilho E no
+        ruído, para não piscar).
 
   2. REALCE, em luz baixa ou crítica:
        - empilhamento: média dos últimos quadros da tora PARADA (até N). O
@@ -46,11 +53,47 @@ NIVEIS = ("boa", "baixa", "critica")
 _KERNEL_RUIDO = np.array([[1, -2, 1], [-2, 4, -2], [1, -2, 1]], dtype=np.float32)
 
 
+def _brilho(frame: np.ndarray) -> float:
+    """Percentil 95 do cinza, no quadro reduzido à metade."""
+    return float(np.percentile(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)[::2, ::2], 95))
+
+
+# Pesos do cvtColor BGR->GRAY, em float: a diferença entre quadros precisa de
+# resolução abaixo de 1 nível (o cinza uint8 arredonda e quantiza o quantil).
+_PESOS_CINZA = np.array([0.114, 0.587, 0.299], dtype=np.float32)
+# Quantil 25 de |d| para d ~ Normal(0, sigma*raiz(2)) = 0,3186*sigma*raiz(2).
+_Q25_PARA_SIGMA = 1.0 / (0.3186 * math.sqrt(2.0))
+
+
+def cinza_para_ruido(frame: np.ndarray) -> np.ndarray:
+    """Cinza float na metade da resolução (entrada de ruido_temporal)."""
+    return frame[::2, ::2].astype(np.float32) @ _PESOS_CINZA
+
+
+def ruido_temporal(cinza: np.ndarray, anterior: np.ndarray | None) -> float | None:
+    """
+    Sigma do ruído do sensor pela diferença entre dois quadros seguidos.
+    Câmera fixa: o que é igual nos dois (fundo, textura) some; sobra ruído
+    e o que mexeu. Usa o quantil 25 de |diferença| (não a média): a tora
+    mexendo em até ~3/4 do quadro não contamina. None = não dá para medir
+    (primeiro quadro, resolução mudou, ou quadro repetido pelo driver).
+    """
+    if anterior is None or anterior.shape != cinza.shape:
+        return None
+    d = np.abs(cinza - anterior)
+    if not d.any():
+        return None
+    return float(np.percentile(d, 25)) * _Q25_PARA_SIGMA
+
+
 def medir_luz(frame: np.ndarray) -> tuple[float, float]:
-    """(brilho = percentil 95 do cinza, ruído = sigma estimado), no quadro reduzido à metade."""
-    cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    meio = cinza[::2, ::2].astype(np.float32)  # metade da resolução: rápido, e o ruído continua visível
-    brilho = float(np.percentile(meio, 95))
+    """
+    (brilho = percentil 95 do cinza, ruído ESPACIAL de Immerkær) num quadro
+    só. Referência para comparar quadros (testes); o RealceLuz classifica
+    pelo ruído temporal, porque o espacial confunde textura com ruído.
+    """
+    brilho = _brilho(frame)
+    meio = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)[::2, ::2].astype(np.float32)
     h, w = meio.shape
     if h < 3 or w < 3:
         return brilho, 0.0
@@ -103,16 +146,17 @@ class RealceLuz:
         self._acum: np.ndarray | None = None
         self._acum_peq: np.ndarray | None = None
         self._n = 0
+        self._cinza_ant: np.ndarray | None = None  # quadro anterior (cru), para o ruído temporal
 
     # ---------- classificação ----------
 
     def _classificar(self, brilho: float, ruido: float) -> str:
-        """Nível com histerese de 10%: perto do limiar ele não fica trocando a cada quadro."""
-        folga_critica = 1.10 if self.nivel == "critica" else 1.0  # para SAIR de crítica precisa passar 10% acima
+        """Nível com histerese de 10% no brilho e no ruído: perto do limiar ele não fica trocando a cada quadro."""
+        folga_critica = 1.10 if self.nivel == "critica" else 1.0  # para SAIR de crítica precisa passar 10% além
         folga_boa = 1.10 if self.nivel != "boa" else 1.0          # para VOLTAR a boa, idem
-        if brilho < self.limiar_critica * folga_critica or ruido > self.ruido_critico:
+        if brilho < self.limiar_critica * folga_critica or ruido > self.ruido_critico / folga_critica:
             return "critica"
-        if brilho < self.limiar_boa * folga_boa or ruido > self.ruido_baixa:
+        if brilho < self.limiar_boa * folga_boa or ruido > self.ruido_baixa / folga_boa:
             return "baixa"
         return "boa"
 
@@ -149,10 +193,14 @@ class RealceLuz:
         """Mede e, se a luz estiver ruim, devolve o quadro realçado (senão, o próprio)."""
         if frame is None or not self.ligado:
             return frame
-        brilho, ruido = medir_luz(frame)
+        brilho = _brilho(frame)
+        cinza = cinza_para_ruido(frame)
+        ruido = ruido_temporal(cinza, self._cinza_ant)
+        self._cinza_ant = cinza
         self._brilho = brilho if self._brilho is None else 0.8 * self._brilho + 0.2 * brilho
-        self._ruido = ruido if self._ruido is None else 0.8 * self._ruido + 0.2 * ruido
-        self.nivel = self._classificar(self._brilho, self._ruido)
+        if ruido is not None:  # sem medida neste quadro: mantém a anterior
+            self._ruido = ruido if self._ruido is None else 0.8 * self._ruido + 0.2 * ruido
+        self.nivel = self._classificar(self._brilho, self._ruido or 0.0)
 
         if self.nivel == "boa":
             self._zerar_pilha()

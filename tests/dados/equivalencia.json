@@ -254,6 +254,7 @@
   "tora_exigir_cor": true,
   "tora_fracao_madeira_min": 0.55,
   "tora_fracao_pele_max": 0.6,
+  "tora_palida_b_min": 122.0,
   "tora_razao_max": 6.0,
   "tora_solidez_min": 0.8
  },
@@ -435,9 +436,9 @@
     "ganho": 4.0,
     "ligado": true,
     "nivel": "baixa",
-    "ruido": 2.7
+    "ruido": 0.0
    },
-   "hud": "Luz: BAIXA (brilho 36, ruido 2.7) | realce: ganho 4.0x, 1 quadros",
+   "hud": "Luz: BAIXA (brilho 36, ruido 0.0) | realce: ganho 4.0x, 1 quadros",
    "md5": "78d77c76e1f9272f2210c21e46546c7c"
   },
   {
@@ -447,9 +448,9 @@
     "ganho": 4.0,
     "ligado": true,
     "nivel": "baixa",
-    "ruido": 2.7
+    "ruido": 2.5
    },
-   "hud": "Luz: BAIXA (brilho 36, ruido 2.7) | realce: ganho 4.0x, 2 quadros",
+   "hud": "Luz: BAIXA (brilho 36, ruido 2.5) | realce: ganho 4.0x, 2 quadros",
    "md5": "572c895eb9bae9731e64434f1656c52e"
   },
   {
@@ -459,9 +460,9 @@
     "ganho": 4.0,
     "ligado": true,
     "nivel": "baixa",
-    "ruido": 2.7
+    "ruido": 2.5
    },
-   "hud": "Luz: BAIXA (brilho 36, ruido 2.7) | realce: ganho 4.0x, 3 quadros",
+   "hud": "Luz: BAIXA (brilho 36, ruido 2.5) | realce: ganho 4.0x, 3 quadros",
    "md5": "a77f3ab5ef85e29c01f58983dfe0ca33"
   },
   {
@@ -471,9 +472,9 @@
     "ganho": 4.0,
     "ligado": true,
     "nivel": "baixa",
-    "ruido": 2.7
+    "ruido": 2.5
    },
-   "hud": "Luz: BAIXA (brilho 36, ruido 2.7) | realce: ganho 4.0x, 4 quadros",
+   "hud": "Luz: BAIXA (brilho 36, ruido 2.5) | realce: ganho 4.0x, 4 quadros",
    "md5": "d7368e4ee9f12ddf68833c41ac061db4"
   },
   {
@@ -483,9 +484,9 @@
     "ganho": 4.0,
     "ligado": true,
     "nivel": "baixa",
-    "ruido": 2.7
+    "ruido": 2.5
    },
-   "hud": "Luz: BAIXA (brilho 36, ruido 2.7) | realce: ganho 4.0x, 5 quadros",
+   "hud": "Luz: BAIXA (brilho 36, ruido 2.5) | realce: ganho 4.0x, 5 quadros",
    "md5": "b53c4935901c0347d2dd84e0df0abe87"
   },
   {
@@ -495,9 +496,9 @@
     "ganho": 4.0,
     "ligado": true,
     "nivel": "baixa",
-    "ruido": 2.7
+    "ruido": 2.5
    },
-   "hud": "Luz: BAIXA (brilho 36, ruido 2.7) | realce: ganho 4.0x, 6 quadros",
+   "hud": "Luz: BAIXA (brilho 36, ruido 2.5) | realce: ganho 4.0x, 6 quadros",
    "md5": "845f8a2e303131b5c6e99445a8a0fbf2"
   },
   {
@@ -507,9 +508,9 @@
     "ganho": 4.0,
     "ligado": true,
     "nivel": "baixa",
-    "ruido": 2.7
+    "ruido": 2.5
    },
-   "hud": "Luz: BAIXA (brilho 36, ruido 2.7) | realce: ganho 4.0x, 7 quadros",
+   "hud": "Luz: BAIXA (brilho 36, ruido 2.5) | realce: ganho 4.0x, 7 quadros",
    "md5": "0f134672a656511d274196d6afd8cfc6"
   },
   {
@@ -519,9 +520,9 @@
     "ganho": 4.0,
     "ligado": true,
     "nivel": "baixa",
-    "ruido": 2.7
+    "ruido": 2.5
    },
-   "hud": "Luz: BAIXA (brilho 36, ruido 2.7) | realce: ganho 4.0x, 8 quadros",
+   "hud": "Luz: BAIXA (brilho 36, ruido 2.5) | realce: ganho 4.0x, 8 quadros",
    "md5": "d11dd0825ec67f8963286431a744555c"
   },
   {
@@ -531,9 +532,9 @@
     "ganho": 4.0,
     "ligado": true,
     "nivel": "baixa",
-    "ruido": 2.7
+    "ruido": 2.5
    },
-   "hud": "Luz: BAIXA (brilho 36, ruido 2.7) | realce: ganho 4.0x, 8 quadros",
+   "hud": "Luz: BAIXA (brilho 36, ruido 2.5) | realce: ganho 4.0x, 8 quadros",
    "md5": "fc7a5a19dc349cab0491f0a69b6f2e54"
   },
   {
@@ -543,9 +544,9 @@
     "ganho": 4.0,
     "ligado": true,
     "nivel": "baixa",
-    "ruido": 2.7
+    "ruido": 2.5
    },
-   "hud": "Luz: BAIXA (brilho 36, ruido 2.7) | realce: ganho 4.0x, 8 quadros",
+   "hud": "Luz: BAIXA (brilho 36, ruido 2.5) | realce: ganho 4.0x, 8 quadros",
    "md5": "6ff8d56e8fad50d2f57b730139b27adc"
   }
  ],

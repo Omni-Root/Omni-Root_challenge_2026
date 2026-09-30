@@ -151,6 +151,13 @@ class Config:
     tora_fracao_pele_max: float = 0.60  # fração de pixels com matiz de pele; acima disso é mão (mão real: 0,7-0,9; madeira rosada chega a 0,4)
     tora_razao_max: float = 6.0         # lado maior / lado menor acima disso = cabo, borda, ruído
     tora_fracao_madeira_min: float = 0.55  # fração de pixels da máscara com cor de madeira (matiz quente + saturação)
+    # Madeira PÁLIDA (creme, pouco saturada) só conta como madeira se o Lab b*
+    # (OpenCV, 128 = neutro) for pelo menos isto. Era 128 fixo: com a rodela
+    # ocupando o quadro, o auto-balanço da webcam puxa o creme para o neutro
+    # e o miolo caiu para b* 126-128 (capturas de 30/09) — metade dos pixels
+    # falhava por 1-2 unidades e o portão alternava tora/sem tora. Papel
+    # branco nas mesmas capturas: b* ~95 (antes 106-112). 122 fica no meio.
+    tora_palida_b_min: float = 122.0
 
     # --- Gravação por EVENTO DE TORA (ver RastreadorTora) ---
     # "evento": uma tora = um registro. O evento abre quando a tora aparece

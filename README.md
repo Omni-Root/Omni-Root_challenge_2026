@@ -394,7 +394,7 @@ Identidade da máquina e do talhão, clone, caminhos, limiares da IA
 | `filtro_persistencia` | Nº de análises consecutivas em que o defeito precisa aparecer (`1` desliga). |
 | *(mesa preta)* | Sem parâmetro: `segmentar_fundo_escuro` entra sozinho quando a borda do frame é escura. |
 | `fundo_auto_seg` / `fundo_limiar` / `fundo_salvar_em` | Fundo de referência: segundos de captura automática no início (0 = só tecla `b`); distância Lab mínima para "difere do fundo"; onde salvar a cópia. |
-| `tora_exigir_cor`, `tora_solidez_min`, `tora_fracao_pele_max`, `tora_razao_max`, `tora_fracao_madeira_min` | Portão "é madeira?" (seção 3). Reprovou → `SEM TORA`, nada é gravado. |
+| `tora_exigir_cor`, `tora_solidez_min`, `tora_fracao_pele_max`, `tora_razao_max`, `tora_fracao_madeira_min`, `tora_palida_b_min` | Portão "é madeira?" (seção 3). Reprovou → `SEM TORA`, nada é gravado. `tora_palida_b_min` (Lab b*, 128 = neutro) é o mínimo para madeira creme pouco saturada contar como madeira: 122 porque o auto-balanço da webcam deixa o creme em ~126; papel branco sai em ~95. |
 | `conf_por_classe` | Limiar de confiança por classe, sobrepondo `conf_threshold`. Padrão: `resin` 0,80, `Live_Knot` 0,70, `Marrow` 0,65, `Quartzity` 0,70 — as classes que o modelo (treinado em madeira serrada) mais confunde com casca e borda de eucalipto. `Crack`/`Dead_Knot` ficam no geral. |
 | `balanco_branco_borda` | Balanço de branco estimado pela borda do frame (fundo). **0 = desligado (padrão)**; ligue (ex. 0.10) só se o fundo do palco sair colorido e a segmentação sofrer — teste antes com `--fonte`. |
 | `modo_gravacao` | `evento` (padrão: uma tora = um registro) ou `intervalo` (grava a cada `intervalo_captura_seg` enquanto há tora — só para comparação). |
@@ -403,7 +403,7 @@ Identidade da máquina e do talhão, clone, caminhos, limiares da IA
 | `evento_defeito_min_quadros` | Defeito precisa aparecer em N quadros do evento para entrar no registro. |
 | `stream_url`, `stream_fps`, `stream_largura_px`, `stream_jpeg_qualidade` | Câmera ao vivo no dashboard (seção 3). URL vazia desliga; token em `STREAM_TOKEN` no `.env`. |
 | `gnss_porta` / `gnss_baud` / `gnss_arquivo` / `gnss_validade_s` | Posição de cada tora: porta serial NMEA (`"COM5"`, GNSS da máquina ou receptor USB), trilha NMEA gravada, ou `"windows"` (Localização do Windows, no notebook da maquete). `--gnss` sobrescreve. Vazio = toras sem posição. |
-| `luz_realce`, `luz_limiar_boa`, `luz_limiar_critica`, `luz_ruido_baixa`, `luz_ruido_critico`, `luz_ganho_max`, `luz_empilhar_max` | Pouca luz (`omniroot/luz.py`): em luz baixa/crítica empilha quadros da tora parada e aplica ganho que preserva a cor. Nunca recusa: em luz crítica mede e marca `_luz_critica` (baixa confiança, fora dos alertas do dashboard). O HUD mostra brilho/ruído medidos para calibrar. |
+| `luz_realce`, `luz_limiar_boa`, `luz_limiar_critica`, `luz_ruido_baixa`, `luz_ruido_critico`, `luz_ganho_max`, `luz_empilhar_max` | Pouca luz (`omniroot/luz.py`): em luz baixa/crítica empilha quadros da tora parada e aplica ganho que preserva a cor. Nunca recusa: em luz crítica mede e marca `_luz_critica` (baixa confiança, fora dos alertas do dashboard). O ruído é medido no tempo (diferença entre quadros seguidos), então textura de fundo não conta como ruído. O HUD mostra brilho/ruído medidos para calibrar. |
 
 ### Demais diretórios
 

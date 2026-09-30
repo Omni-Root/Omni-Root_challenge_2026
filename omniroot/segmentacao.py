@@ -543,8 +543,10 @@ def validar_tora(frame: np.ndarray, mask: np.ndarray | None, contorno, origem: s
         lab_b = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)[..., 2][dentro].astype(np.int32)
         quente = ((hue <= 35) | (hue >= 165)) & (sat >= 20) & (val >= 20)
         # Pálida só conta como madeira se NÃO for fria: papel/parede brancos
-        # saem azulados (b* < 128) na webcam e não podem passar por madeira.
-        palida = (sat < 45) & (val >= 110) & (lab_b >= 128)
+        # saem azulados na webcam (b* ~95-112) e não podem passar por madeira.
+        # O limite não é o neutro exato (128): o auto-balanço da câmera deixa
+        # o creme em ~126 (ver tora_palida_b_min).
+        palida = (sat < 45) & (val >= 110) & (lab_b >= cfg.tora_palida_b_min)
         madeira = quente | palida
         fracao_madeira = float(np.mean(madeira))
         met["madeira"] = round(fracao_madeira, 3)

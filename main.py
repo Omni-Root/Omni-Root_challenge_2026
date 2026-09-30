@@ -448,6 +448,7 @@ def main():
                 time.sleep(0.1)
                 continue
 
+            cru = frame  # o que a câmera entregou (tecla 's' salva este)
             frame = realce.processar(frame)
             if realce.ligado:
                 # Console: avisa só quando o nível MUDA e fica estável por 1,5 s.
@@ -490,11 +491,12 @@ def main():
                     # Fundo de referência manual: garra/mesa VAZIA na frente da câmera.
                     definir_fundo(frame.copy(), "manual, tecla b")
                 if tecla == ord('s'):
-                    # Frame CRU (sem desenho): serve para dataset e para testar
-                    # o pipeline offline com `--fonte ./capturas`.
+                    # Frame CRU (sem desenho e SEM realce de luz): serve para
+                    # dataset e para testar o pipeline offline com
+                    # `--fonte ./capturas` — que aplica o realce de novo.
                     pasta_capturas.mkdir(exist_ok=True)
                     nome = pasta_capturas / f"frame_{datetime.now():%Y%m%d_%H%M%S}.jpg"
-                    cv2.imwrite(str(nome), frame)
+                    cv2.imwrite(str(nome), cru)
                     print(f"💾 Frame salvo em {nome}")
             else:
                 # Sem janela: só mantém o worker alimentado sem ocupar 100% da CPU.
