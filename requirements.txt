@@ -12,6 +12,9 @@ ultralytics
 # Precisa ser >= 4.7 (cv2.aruco no pacote principal, para a escala automática).
 opencv-python>=4.7
 numpy
+# Leitura do GNSS por porta serial (receptor USB ou GNSS da máquina em
+# NMEA). Só é importado se gnss_porta estiver configurada.
+pyserial
 
 # --- Inferência em CPU (o harvester não tem GPU) ---
 # OpenVINO é o runtime da Intel para CPU: ~5x mais rápido que rodar o .pt

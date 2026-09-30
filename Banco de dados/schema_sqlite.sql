@@ -32,7 +32,18 @@ CREATE TABLE toras_local (
                           CHECK (status_classificacao IN ('aprovado', 'quarentena', 'reprovado')),
     hash_sha256           TEXT NOT NULL,
     sync_status           INTEGER NOT NULL DEFAULT 0 CHECK (sync_status IN (0, 1)),
-    criado_em             TEXT NOT NULL DEFAULT (datetime('now'))
+    criado_em             TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Posição da máquina quando a tora foi gravada (omniroot/posicao.py).
+    -- Tudo NULL = tora sem posição (sem GNSS/sem fix) — permitido e normal.
+    -- Bancos criados antes destas colunas são migrados pelo main.py
+    -- (migrar_banco_local), sem perder dados.
+    pos_lat               REAL,                       -- graus decimais, WGS84 (S negativo)
+    pos_lon               REAL,                       -- graus decimais, WGS84 (W negativo)
+    pos_hdop              REAL,                       -- diluição horizontal informada pelo receptor
+    pos_satelites         INTEGER,                    -- satélites em uso informados pelo receptor
+    pos_fonte             TEXT,                       -- 'gnss_serial' (receptor/GNSS da máquina) | 'gnss_log' (trilha gravada) | 'windows_localizacao'
+    pos_idade_s           REAL,                       -- idade da leitura no momento da gravação
+    pos_precisao_m        REAL                        -- raio de incerteza em metros, quando a fonte informa (Windows)
 );
 
 CREATE INDEX idx_toras_local_sync ON toras_local(sync_status);
