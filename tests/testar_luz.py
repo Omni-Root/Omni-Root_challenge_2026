@@ -4,10 +4,10 @@ testar_luz.py — pouca luz (omniroot/luz.py) com cenas sintéticas, sem câmera
 A mesma "tora" (elipse cor de madeira sobre mesa preta) em três condições:
   - luz boa;
   - luz BAIXA: cena escurecida para 30% + ruído de sensor (câmera no ganho alto);
-  - luz INSUFICIENTE: cena a 7% + ruído.
+  - luz CRÍTICA: cena a 7% + ruído (mede, com baixa confiança).
 
 Verifica:
-  1. o medidor classifica cada condição (boa / baixa / insuficiente);
+  1. o medidor classifica cada condição (boa / baixa / critica);
   2. em luz boa o quadro passa intacto;
   3. em luz baixa o realce (empilhamento + ganho) reduz o ruído e PRESERVA a
      cor da madeira (matiz), e o pipeline REAL do main.py (segmentação +
@@ -30,8 +30,10 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from omniroot.luz import RealceLuz, medir_luz  # noqa: E402
-from main import Config, consolidar_evento, segmentar_tora_origem, validar_tora  # noqa: E402
+from omniroot.luz import RealceLuz, medir_luz, nivel_do_evento  # noqa: E402
+from omniroot.config import Config  # noqa: E402
+from omniroot.evento import consolidar_evento  # noqa: E402
+from omniroot.segmentacao import segmentar_tora_origem, validar_tora  # noqa: E402
 
 
 def cena(fator: float, sigma_ruido: float, seed: int = 0, dx: int = 0) -> np.ndarray:
@@ -74,13 +76,13 @@ def main() -> int:
 
     def realce_novo() -> RealceLuz:
         return RealceLuz(
-            limiar_boa=cfg.luz_limiar_boa, limiar_insuficiente=cfg.luz_limiar_insuficiente,
-            ruido_baixa=cfg.luz_ruido_baixa, ruido_insuficiente=cfg.luz_ruido_insuficiente,
+            limiar_boa=cfg.luz_limiar_boa, limiar_critica=cfg.luz_limiar_critica,
+            ruido_baixa=cfg.luz_ruido_baixa, ruido_critico=cfg.luz_ruido_critico,
             ganho_max=cfg.luz_ganho_max, empilhar_max=cfg.luz_empilhar_max,
         )
 
     print("1) medidor")
-    for nome, fator, sigma, esperado in [("boa", 1.0, 2.0, "boa"), ("baixa", 0.30, 5.0, "baixa"), ("insuficiente", 0.07, 5.0, "insuficiente")]:
+    for nome, fator, sigma, esperado in [("boa", 1.0, 2.0, "boa"), ("baixa", 0.30, 5.0, "baixa"), ("critica", 0.07, 5.0, "critica")]:
         r = realce_novo()
         for i in range(10):
             r.processar(cena(fator, sigma, seed=i))
@@ -153,6 +155,17 @@ def main() -> int:
     checar(not ind["densidade"]["metodo"].endswith("_luz_baixa"), "densidade (não vem da imagem) não é marcada")
     checar(ev_boa["luz"] == "boa" and not ev_boa["indicadores"]["porcentagem_casca"]["metodo"].endswith("_luz_baixa"),
            "evento em luz boa não é marcado")
+    ev_critica = consolidar_evento([{**base, "luz": "critica"}] * 3 + [{**base, "luz": "baixa"}] * 2, cfg)
+    checar(ev_critica["luz"] == "critica"
+           and ev_critica["indicadores"]["porcentagem_casca"]["metodo"] == "opencv_otsu_casca_residual_luz_critica",
+           "evento em luz crítica é MEDIDO e marcado _luz_critica (não recusado)")
+
+    print("6) nível da tora a partir dos quadros")
+    checar(nivel_do_evento(["boa"] * 3 + ["critica"] * 2) == "boa", "3 boa + 2 crítica -> boa")
+    checar(nivel_do_evento(["boa"] * 2 + ["critica"] * 2 + ["baixa"]) == "baixa",
+           "2 boa + 2 crítica + 1 baixa -> baixa (maioria em luz ruim, mas não maioria crítica)")
+    checar(nivel_do_evento(["critica"] * 3 + ["boa"] * 2) == "critica", "maioria crítica -> critica")
+    checar(nivel_do_evento([]) == "boa", "sem quadros -> boa")
 
     print()
     print("TUDO OK" if falhas == 0 else f"{falhas} FALHA(S)")

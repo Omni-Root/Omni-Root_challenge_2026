@@ -28,7 +28,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from main import abrir_fonte, carregar_configuracao_json
+from omniroot.config import carregar_configuracao_json
+from omniroot.fontes import abrir_fonte
 
 
 def pegar_frame(captura):

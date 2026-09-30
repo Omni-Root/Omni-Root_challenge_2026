@@ -28,15 +28,10 @@ import numpy as np
 # Permite `python tests/simular_cenario.py` a partir da raiz do repositório.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from main import (  # noqa: E402
-    FiltroPersistencia,
-    analisar_frame,
-    carregar_configuracao_json,
-    carregar_modelo,
-    conectar_banco,
-    resumir_analise,
-    salvar_inspecao,
-)
+from omniroot.analise import analisar_frame, resumir_analise  # noqa: E402
+from omniroot.config import carregar_configuracao_json  # noqa: E402
+from omniroot.deteccao import FiltroPersistencia, carregar_modelo  # noqa: E402
+from omniroot.registro import conectar_banco, salvar_inspecao  # noqa: E402
 
 EXTENSOES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 

@@ -252,14 +252,53 @@ Roda o modelo numa pasta de imagens, salva as versões anotadas em
 python tests\simular_cenario.py --num-toras 15 --pasta .\fotos_eucalipto
 ```
 
-Roda o **mesmo** `analisar_frame()` do `main.py` sobre imagens de disco (ou
+Roda o **mesmo** `analisar_frame()` (`omniroot/analise.py`) sobre imagens de disco (ou
 frames sintéticos, se a pasta não existir) e grava no SQLite como a máquina
 faria. Útil para popular o Postgres/dashboard com dados produzidos pelo código
 real (`--sem-banco` só analisa).
 
+### Rodar os testes (sem câmera, sem banco)
+
+```powershell
+python tests\testar_equivalencia.py     # o pipeline inteiro continua idêntico à referência
+python tests\testar_evento_tora.py      # uma tora = um registro
+python tests\testar_luz.py              # pouca luz: medidor, realce, proveniência
+python tests\testar_posicao.py          # GNSS/NMEA, Localização do Windows, migração do SQLite
+python tests\testar_densidade_clones.py # densidade por clone vinda do cache sincronizado
+```
+
+`testar_equivalencia.py --gerar` grava uma referência nova — só quando uma
+mudança de comportamento for **intencional**.
+
 ---
 
 ## 4. O que cada peça faz
+
+### Organização do código
+O `main.py` é só o **ponto de entrada** (argumentos, threads, loop de captura).
+A lógica vive no pacote `omniroot/`, um módulo por responsabilidade:
+
+| Módulo | Responsabilidade |
+|---|---|
+| `config.py` | `Config` (todos os parâmetros, com os padrões comentados) e leitura do `config.json` |
+| `fontes.py` | Câmera, arquivo de vídeo ou pasta de imagens |
+| `luz.py` | Medidor de luz e realce em pouca luz (empilhamento de quadros + ganho que preserva a cor) |
+| `analise.py` | Pipeline de **um** quadro, da imagem aos indicadores (função pura) |
+| `segmentacao.py` | Máscara da tora (mesa preta, fundo claro, fundo de referência) e portão "é madeira?" |
+| `deteccao.py` | Modelo YOLO (carga, cinza + CLAHE, inferência) e filtros de falso positivo |
+| `medidas.py` | Escala px→cm (ArUco/calibração/GSD), diâmetro, casca, tortuosidade, rachadura, volume, massa |
+| `inventario.py` | Densidade por clone (cache sincronizado do Postgres, recarga automática) |
+| `classificacao.py` | Severidade dos defeitos, saúde da tora, aprovado/quarentena/reprovado, hash |
+| `evento.py` | Uma tora = um registro (rastreador de quadros e consolidação) |
+| `registro.py` | Gravação no SQLite local (tora, indicadores, defeitos, posição) |
+| `banco_local.py` | Schema/migração compartilhados com o `sync_daemon.py` |
+| `posicao.py` | Posição da máquina: GNSS (NMEA serial/arquivo) ou Localização do Windows |
+| `hud.py` / `stream.py` | Desenho na tela do operador / câmera ao vivo no dashboard |
+
+Os nomes continuam importáveis de `main` (compatibilidade), mas o código novo
+importa do módulo. **Garantia de comportamento:** `tests/testar_equivalencia.py`
+passa cenas fixas por todo o pipeline e compara com uma referência gravada
+(números, textos do HUD e pixels) — refatorar não pode mudar nada.
 
 ### `main.py` — inspeção em campo
 O coração do projeto. Roda em **três threads** para a imagem nunca congelar:
@@ -358,11 +397,13 @@ Identidade da máquina e do talhão, clone, caminhos, limiares da IA
 | `tora_exigir_cor`, `tora_solidez_min`, `tora_fracao_pele_max`, `tora_razao_max`, `tora_fracao_madeira_min` | Portão "é madeira?" (seção 3). Reprovou → `SEM TORA`, nada é gravado. |
 | `conf_por_classe` | Limiar de confiança por classe, sobrepondo `conf_threshold`. Padrão: `resin` 0,80, `Live_Knot` 0,70, `Marrow` 0,65, `Quartzity` 0,70 — as classes que o modelo (treinado em madeira serrada) mais confunde com casca e borda de eucalipto. `Crack`/`Dead_Knot` ficam no geral. |
 | `balanco_branco_borda` | Balanço de branco estimado pela borda do frame (fundo). **0 = desligado (padrão)**; ligue (ex. 0.10) só se o fundo do palco sair colorido e a segmentação sofrer — teste antes com `--fonte`. |
-| `modo_gravacao` | `intervalo` (padrão: grava a cada `intervalo_captura_seg` enquanto há tora) ou `evento` (uma tora = um registro). |
+| `modo_gravacao` | `evento` (padrão: uma tora = um registro) ou `intervalo` (grava a cada `intervalo_captura_seg` enquanto há tora — só para comparação). |
 | `evento_frames_abrir` / `_fechar` / `_minimo` | Análises seguidas com tora para abrir; sem tora para fechar; mínimo para não ser ruído. |
 | `evento_iou_troca` / `evento_frames_troca` | Contorno com IoU abaixo disso por tantos quadros = outra tora entrou sem gap. |
 | `evento_defeito_min_quadros` | Defeito precisa aparecer em N quadros do evento para entrar no registro. |
 | `stream_url`, `stream_fps`, `stream_largura_px`, `stream_jpeg_qualidade` | Câmera ao vivo no dashboard (seção 3). URL vazia desliga; token em `STREAM_TOKEN` no `.env`. |
+| `gnss_porta` / `gnss_baud` / `gnss_arquivo` / `gnss_validade_s` | Posição de cada tora: porta serial NMEA (`"COM5"`, GNSS da máquina ou receptor USB), trilha NMEA gravada, ou `"windows"` (Localização do Windows, no notebook da maquete). `--gnss` sobrescreve. Vazio = toras sem posição. |
+| `luz_realce`, `luz_limiar_boa`, `luz_limiar_critica`, `luz_ruido_baixa`, `luz_ruido_critico`, `luz_ganho_max`, `luz_empilhar_max` | Pouca luz (`omniroot/luz.py`): em luz baixa/crítica empilha quadros da tora parada e aplica ganho que preserva a cor. Nunca recusa: em luz crítica mede e marca `_luz_critica` (baixa confiança, fora dos alertas do dashboard). O HUD mostra brilho/ruído medidos para calibrar. |
 
 ### Demais diretórios
 
@@ -424,7 +465,7 @@ desnecessária.
 
 Os pesos são uma **decisão de projeto** baseada em características conhecidas da
 madeira, não uma norma publicada. Se a Suzano/JD fornecer o critério oficial, é
-só ajustar os conjuntos no topo de `main.py` — nada mais muda.
+só ajustar os conjuntos no topo de `omniroot/classificacao.py` — nada mais muda.
 
 ---
 

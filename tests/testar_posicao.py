@@ -26,14 +26,10 @@ RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ))
 
 from omniroot.posicao import FONTE_LOG, FONTE_WINDOWS, LeitorPosicao, checksum_ok, ler_sentenca  # noqa: E402
-from main import (  # noqa: E402
-    Config,
-    _hash_inspecao,
-    atualizar_inspecao,
-    gerar_hash_sha256,
-    migrar_banco_local,
-    salvar_inspecao,
-)
+from omniroot.banco_local import migrar_banco_local  # noqa: E402
+from omniroot.classificacao import gerar_hash_sha256  # noqa: E402
+from omniroot.config import Config  # noqa: E402
+from omniroot.registro import _hash_inspecao, atualizar_inspecao, salvar_inspecao  # noqa: E402
 
 
 def nmea(corpo: str) -> str:

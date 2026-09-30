@@ -32,7 +32,8 @@ import cv2
 import yaml
 from ultralytics import YOLO
 
-from main import carregar_configuracao_json, preprocessar_para_modelo
+from omniroot.config import carregar_configuracao_json
+from omniroot.deteccao import preprocessar_para_modelo
 
 CLASSES = ["Quartzity", "Live_Knot", "Marrow", "resin", "Dead_Knot", "knot_with_crack", "Knot_missing", "Crack"]
 EXTENSOES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}

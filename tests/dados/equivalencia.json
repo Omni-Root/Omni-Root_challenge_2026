@@ -1,0 +1,1887 @@
+{
+ "banco": {
+  "colunas": [
+   "id",
+   "uuid_local",
+   "maquina_id",
+   "talhao_id",
+   "log_id",
+   "data_inspecao",
+   "confianca_ia",
+   "status_classificacao",
+   "hash_sha256",
+   "sync_status",
+   "criado_em",
+   "pos_lat",
+   "pos_lon",
+   "pos_hdop",
+   "pos_satelites",
+   "pos_fonte",
+   "pos_idade_s",
+   "pos_precisao_m"
+  ],
+  "defeitos": [
+   {
+    "altura": 36.0,
+    "confianca": 0.82,
+    "largura": 40.0,
+    "pos_x": 250.0,
+    "pos_y": 215.0,
+    "sync_status": 0,
+    "tipo_defeito": "Dead_Knot"
+   }
+  ],
+  "hash_confere": true,
+  "indicadores": [
+   {
+    "metodo_medicao": "imagem_lateral_gsd_optica_generica",
+    "sync_status": 0,
+    "tipo_indicador": "altura",
+    "unidade": "cm",
+    "valor": 51.14
+   },
+   {
+    "metodo_medicao": "yolo_severidade",
+    "sync_status": 0,
+    "tipo_indicador": "apodrecimento_pragas",
+    "unidade": "%",
+    "valor": 52.38
+   },
+   {
+    "metodo_medicao": "lookup_clone_SP3108",
+    "sync_status": 0,
+    "tipo_indicador": "densidade",
+    "unidade": "kg/m3",
+    "valor": 490.0
+   },
+   {
+    "metodo_medicao": "imagem_lateral_gsd_optica_generica",
+    "sync_status": 0,
+    "tipo_indicador": "diametro",
+    "unidade": "cm",
+    "valor": 15.82
+   },
+   {
+    "metodo_medicao": "volume_x_densidade_clone_SP3108",
+    "sync_status": 0,
+    "tipo_indicador": "massa_seca",
+    "unidade": "kg",
+    "valor": 2.5
+   },
+   {
+    "metodo_medicao": "opencv_otsu_casca_residual",
+    "sync_status": 0,
+    "tipo_indicador": "porcentagem_casca",
+    "unidade": "%",
+    "valor": 3.3
+   },
+   {
+    "metodo_medicao": "opencv_eixo_flecha",
+    "sync_status": 0,
+    "tipo_indicador": "tortuosidade",
+    "unidade": "indice",
+    "valor": 0.14
+   },
+   {
+    "metodo_medicao": "cilindro_medido",
+    "sync_status": 0,
+    "tipo_indicador": "volume_util",
+    "unidade": "m3",
+    "valor": 0.005
+   }
+  ],
+  "tora": {
+   "confianca_ia": 0.7,
+   "maquina_id": "RASPI-DEMO-01",
+   "pos_fonte": "gnss_serial",
+   "pos_hdop": 0.9,
+   "pos_idade_s": 0.3,
+   "pos_lat": -23.5641,
+   "pos_lon": -46.6524,
+   "pos_precisao_m": null,
+   "pos_satelites": 9,
+   "status_classificacao": "quarentena",
+   "sync_status": 0,
+   "talhao_id": "Talhão Demo",
+   "uuid_local": "11111111-2222-3333-4444-555555555555"
+  }
+ },
+ "classificacao": [
+  {
+   "saude": 1.0,
+   "status": "aprovado"
+  },
+  {
+   "saude": 0.549,
+   "status": "reprovado"
+  },
+  {
+   "saude": 0.9175,
+   "status": "aprovado"
+  },
+  {
+   "saude": 0.4332,
+   "status": "reprovado"
+  }
+ ],
+ "com_fundo_de_referencia": {
+  "confianca_saude": 1.0,
+  "contorno": {
+   "area": 51093.5,
+   "bbox": [
+    91,
+    168,
+    459,
+    145
+   ],
+   "pontos": 81
+  },
+  "defeitos": [],
+  "descartados": [],
+  "eh_tora": true,
+  "hud": [
+   "Status: APROVADO | Clone: SP3108",
+   "Saude 100% | Casca 0.0% | Defeitos 0",
+   "Lateral | Diam 15.6cm | Compr 51cm | Dens 490kg/m3 | Tort 0.1%",
+   "Escala: gsd_optica_generica (1.11 mm/px) | Seg: fundo"
+  ],
+  "indicadores": {
+   "altura": {
+    "metodo": "imagem_lateral_gsd_optica_generica",
+    "unidade": "cm",
+    "valor": 50.92
+   },
+   "apodrecimento_pragas": {
+    "metodo": "yolo_severidade",
+    "unidade": "%",
+    "valor": 100.0
+   },
+   "densidade": {
+    "metodo": "lookup_clone_SP3108",
+    "unidade": "kg/m3",
+    "valor": 490.0
+   },
+   "diametro": {
+    "metodo": "imagem_lateral_gsd_optica_generica",
+    "unidade": "cm",
+    "valor": 15.6
+   },
+   "massa_seca": {
+    "metodo": "volume_x_densidade_clone_SP3108",
+    "unidade": "kg",
+    "valor": 4.9
+   },
+   "porcentagem_casca": {
+    "metodo": "opencv_otsu_casca_residual",
+    "unidade": "%",
+    "valor": 0.0
+   },
+   "tortuosidade": {
+    "metodo": "opencv_eixo_flecha",
+    "unidade": "indice",
+    "valor": 0.14
+   },
+   "volume_util": {
+    "metodo": "cilindro_medido",
+    "unidade": "m3",
+    "valor": 0.01
+   }
+  },
+  "marcador": false,
+  "motivo_sem_tora": "",
+  "roi": [
+   0,
+   0,
+   640,
+   480
+  ],
+  "segmentacao": "fundo",
+  "status": "aprovado",
+  "vista": "lateral"
+ },
+ "config_repo": {
+  "balanco_branco_borda": 0.0,
+  "camera_index": 1,
+  "clone_id": "SP3108",
+  "cm_por_px": 0.03717,
+  "comprimento_corte_cm": 600.0,
+  "conf_por_classe": null,
+  "conf_threshold": 0.6,
+  "distancia_camera_tora_cm": 45.0,
+  "distancia_focal_mm": 4.0,
+  "evento_defeito_min_quadros": 2,
+  "evento_frames_abrir": 3,
+  "evento_frames_fechar": 6,
+  "evento_frames_minimo": 4,
+  "evento_frames_troca": 3,
+  "evento_iou_troca": 0.25,
+  "filtro_area_minima": 0.0008,
+  "filtro_dentro_contorno": true,
+  "filtro_persistencia": 2,
+  "fundo_auto_seg": 0.0,
+  "fundo_limiar": 22.0,
+  "fundo_salvar_em": "./capturas/fundo_referencia.jpg",
+  "gnss_arquivo": "",
+  "gnss_baud": 9600,
+  "gnss_porta": "windows",
+  "gnss_validade_s": 5.0,
+  "idade_talhao_anos": 5.3,
+  "imgsz": 640,
+  "intervalo_captura_seg": 2.0,
+  "iou_threshold": 0.55,
+  "largura_sensor_mm": 6.3,
+  "limiar_aprovacao": 0.85,
+  "limiar_quarentena": 0.6,
+  "luz_empilhar_max": 8,
+  "luz_ganho_max": 4.0,
+  "luz_limiar_boa": 90.0,
+  "luz_limiar_critica": 20.0,
+  "luz_realce": true,
+  "luz_ruido_baixa": 6.0,
+  "luz_ruido_critico": 16.0,
+  "maquina_id": "RASPI-DEMO-01",
+  "marcador_aruco_cm": 5.0,
+  "modelo_ncnn_path": "./models/wood_ncnn_model",
+  "modelo_path": "./models/wood_best_int8_openvino_model",
+  "modo_gravacao": "evento",
+  "roi": null,
+  "sqlite_path": "./omni_root_local.db",
+  "stream_fps": 4.0,
+  "stream_jpeg_qualidade": 70,
+  "stream_largura_px": 640,
+  "stream_url": "http://localhost:3001/api/camera/frame",
+  "talhao_id": "Talhão Demo",
+  "tora_exigir_cor": true,
+  "tora_fracao_madeira_min": 0.55,
+  "tora_fracao_pele_max": 0.6,
+  "tora_razao_max": 6.0,
+  "tora_solidez_min": 0.8
+ },
+ "densidade": {
+  "GG100": 490.0,
+  "I144": 485.0,
+  "NAO_EXISTE": 500.0,
+  "SP3108": 490.0
+ },
+ "eventos": [
+  {
+   "confianca_saude": 0.5238,
+   "defeitos": [
+    {
+     "altura": 36.0,
+     "area_relativa": 0.00469,
+     "confianca": 0.82,
+     "largura": 40.0,
+     "pos_x": 250.0,
+     "pos_y": 215.0,
+     "tipo_defeito": "Dead_Knot"
+    },
+    {
+     "altura": 34.0,
+     "area_relativa": 0.00376,
+     "confianca": 0.75,
+     "largura": 34.0,
+     "pos_x": 400.0,
+     "pos_y": 225.0,
+     "tipo_defeito": "Live_Knot"
+    },
+    {
+     "altura": 14.0,
+     "area_relativa": 0.00273,
+     "confianca": 0.71,
+     "largura": 60.0,
+     "pos_x": 300.0,
+     "pos_y": 234.0,
+     "tipo_defeito": "Crack"
+    }
+   ],
+   "descartados": [],
+   "indicadores": {
+    "altura": {
+     "metodo": "imagem_lateral_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 51.14
+    },
+    "apodrecimento_pragas": {
+     "metodo": "yolo_severidade",
+     "unidade": "%",
+     "valor": 52.38
+    },
+    "densidade": {
+     "metodo": "lookup_clone_SP3108",
+     "unidade": "kg/m3",
+     "valor": 490.0
+    },
+    "diametro": {
+     "metodo": "imagem_lateral_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 15.82
+    },
+    "massa_seca": {
+     "metodo": "volume_x_densidade_clone_SP3108",
+     "unidade": "kg",
+     "valor": 2.5
+    },
+    "porcentagem_casca": {
+     "metodo": "opencv_otsu_casca_residual",
+     "unidade": "%",
+     "valor": 3.3
+    },
+    "tortuosidade": {
+     "metodo": "opencv_eixo_flecha",
+     "unidade": "indice",
+     "valor": 0.14
+    },
+    "volume_util": {
+     "metodo": "cilindro_medido",
+     "unidade": "m3",
+     "valor": 0.005
+    }
+   },
+   "luz": "boa",
+   "numero": 1,
+   "quadros": 8,
+   "quadros_laterais": 8,
+   "status": "reprovado",
+   "vista": "lateral"
+  },
+  {
+   "confianca_saude": 0.5238,
+   "defeitos": [
+    {
+     "altura": 36.0,
+     "area_relativa": 0.00469,
+     "confianca": 0.82,
+     "largura": 40.0,
+     "pos_x": 250.0,
+     "pos_y": 215.0,
+     "tipo_defeito": "Dead_Knot"
+    },
+    {
+     "altura": 34.0,
+     "area_relativa": 0.00376,
+     "confianca": 0.75,
+     "largura": 34.0,
+     "pos_x": 400.0,
+     "pos_y": 225.0,
+     "tipo_defeito": "Live_Knot"
+    },
+    {
+     "altura": 14.0,
+     "area_relativa": 0.00273,
+     "confianca": 0.71,
+     "largura": 60.0,
+     "pos_x": 300.0,
+     "pos_y": 234.0,
+     "tipo_defeito": "Crack"
+    }
+   ],
+   "descartados": [],
+   "indicadores": {
+    "altura": {
+     "metodo": "imagem_lateral_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 60.91
+    },
+    "apodrecimento_pragas": {
+     "metodo": "yolo_severidade",
+     "unidade": "%",
+     "valor": 52.38
+    },
+    "densidade": {
+     "metodo": "lookup_clone_SP3108",
+     "unidade": "kg/m3",
+     "valor": 490.0
+    },
+    "diametro": {
+     "metodo": "imagem_secao_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 33.54
+    },
+    "massa_seca": {
+     "metodo": "volume_x_densidade_clone_SP3108",
+     "unidade": "kg",
+     "valor": 13.7
+    },
+    "porcentagem_casca": {
+     "metodo": "opencv_otsu_casca_residual",
+     "unidade": "%",
+     "valor": 18.2
+    },
+    "tortuosidade": {
+     "metodo": "opencv_eixo_flecha",
+     "unidade": "indice",
+     "valor": 9.38
+    },
+    "volume_util": {
+     "metodo": "cilindro_medido",
+     "unidade": "m3",
+     "valor": 0.028
+    }
+   },
+   "luz": "boa",
+   "numero": 2,
+   "quadros": 12,
+   "quadros_laterais": 6,
+   "status": "reprovado",
+   "vista": "secao"
+  }
+ ],
+ "luz": [
+  {
+   "estado": {
+    "brilho": 36.0,
+    "empilhados": 1,
+    "ganho": 4.0,
+    "ligado": true,
+    "nivel": "baixa",
+    "ruido": 2.7
+   },
+   "hud": "Luz: BAIXA (brilho 36, ruido 2.7) | realce: ganho 4.0x, 1 quadros",
+   "md5": "78d77c76e1f9272f2210c21e46546c7c"
+  },
+  {
+   "estado": {
+    "brilho": 36.0,
+    "empilhados": 2,
+    "ganho": 4.0,
+    "ligado": true,
+    "nivel": "baixa",
+    "ruido": 2.7
+   },
+   "hud": "Luz: BAIXA (brilho 36, ruido 2.7) | realce: ganho 4.0x, 2 quadros",
+   "md5": "572c895eb9bae9731e64434f1656c52e"
+  },
+  {
+   "estado": {
+    "brilho": 36.0,
+    "empilhados": 3,
+    "ganho": 4.0,
+    "ligado": true,
+    "nivel": "baixa",
+    "ruido": 2.7
+   },
+   "hud": "Luz: BAIXA (brilho 36, ruido 2.7) | realce: ganho 4.0x, 3 quadros",
+   "md5": "a77f3ab5ef85e29c01f58983dfe0ca33"
+  },
+  {
+   "estado": {
+    "brilho": 36.0,
+    "empilhados": 4,
+    "ganho": 4.0,
+    "ligado": true,
+    "nivel": "baixa",
+    "ruido": 2.7
+   },
+   "hud": "Luz: BAIXA (brilho 36, ruido 2.7) | realce: ganho 4.0x, 4 quadros",
+   "md5": "d7368e4ee9f12ddf68833c41ac061db4"
+  },
+  {
+   "estado": {
+    "brilho": 36.0,
+    "empilhados": 5,
+    "ganho": 4.0,
+    "ligado": true,
+    "nivel": "baixa",
+    "ruido": 2.7
+   },
+   "hud": "Luz: BAIXA (brilho 36, ruido 2.7) | realce: ganho 4.0x, 5 quadros",
+   "md5": "b53c4935901c0347d2dd84e0df0abe87"
+  },
+  {
+   "estado": {
+    "brilho": 36.0,
+    "empilhados": 6,
+    "ganho": 4.0,
+    "ligado": true,
+    "nivel": "baixa",
+    "ruido": 2.7
+   },
+   "hud": "Luz: BAIXA (brilho 36, ruido 2.7) | realce: ganho 4.0x, 6 quadros",
+   "md5": "845f8a2e303131b5c6e99445a8a0fbf2"
+  },
+  {
+   "estado": {
+    "brilho": 36.0,
+    "empilhados": 7,
+    "ganho": 4.0,
+    "ligado": true,
+    "nivel": "baixa",
+    "ruido": 2.7
+   },
+   "hud": "Luz: BAIXA (brilho 36, ruido 2.7) | realce: ganho 4.0x, 7 quadros",
+   "md5": "0f134672a656511d274196d6afd8cfc6"
+  },
+  {
+   "estado": {
+    "brilho": 36.0,
+    "empilhados": 8,
+    "ganho": 4.0,
+    "ligado": true,
+    "nivel": "baixa",
+    "ruido": 2.7
+   },
+   "hud": "Luz: BAIXA (brilho 36, ruido 2.7) | realce: ganho 4.0x, 8 quadros",
+   "md5": "d11dd0825ec67f8963286431a744555c"
+  },
+  {
+   "estado": {
+    "brilho": 36.0,
+    "empilhados": 8,
+    "ganho": 4.0,
+    "ligado": true,
+    "nivel": "baixa",
+    "ruido": 2.7
+   },
+   "hud": "Luz: BAIXA (brilho 36, ruido 2.7) | realce: ganho 4.0x, 8 quadros",
+   "md5": "fc7a5a19dc349cab0491f0a69b6f2e54"
+  },
+  {
+   "estado": {
+    "brilho": 36.0,
+    "empilhados": 8,
+    "ganho": 4.0,
+    "ligado": true,
+    "nivel": "baixa",
+    "ruido": 2.7
+   },
+   "hud": "Luz: BAIXA (brilho 36, ruido 2.7) | realce: ganho 4.0x, 8 quadros",
+   "md5": "6ff8d56e8fad50d2f57b730139b27adc"
+  }
+ ],
+ "persistencia": [
+  [],
+  [
+   "Dead_Knot"
+  ],
+  [
+   "Dead_Knot",
+   "Live_Knot"
+  ],
+  [
+   "Dead_Knot"
+  ]
+ ],
+ "posicao": {
+  "gga": null,
+  "windows": {
+   "fonte": "windows_localizacao",
+   "hdop": null,
+   "lat": -23.5641,
+   "lon": -46.6524,
+   "precisao_m": 83.0,
+   "satelites": null
+  }
+ },
+ "quadros": {
+  "lateral_com_casca": {
+   "confianca_saude": 1.0,
+   "contorno": {
+    "area": 52063.0,
+    "bbox": [
+     90,
+     167,
+     461,
+     147
+    ],
+    "pontos": 88
+   },
+   "defeitos": [],
+   "descartados": [],
+   "eh_tora": true,
+   "hud": [
+    "Status: APROVADO | Clone: SP3108",
+    "Saude 100% | Casca 17.8% | Defeitos 0",
+    "Lateral | Diam 15.8cm | Compr 51cm | Dens 490kg/m3 | Tort 0.1%",
+    "Escala: gsd_optica_generica (1.11 mm/px) | Seg: fundo_escuro | sem fundo de ref. (tecle b com a garra vazia)"
+   ],
+   "hud_md5": "5fe197da02b58d4298d226ab33607600",
+   "indicadores": {
+    "altura": {
+     "metodo": "imagem_lateral_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 51.14
+    },
+    "apodrecimento_pragas": {
+     "metodo": "yolo_severidade",
+     "unidade": "%",
+     "valor": 100.0
+    },
+    "densidade": {
+     "metodo": "lookup_clone_SP3108",
+     "unidade": "kg/m3",
+     "valor": 490.0
+    },
+    "diametro": {
+     "metodo": "imagem_lateral_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 15.82
+    },
+    "massa_seca": {
+     "metodo": "volume_x_densidade_clone_SP3108",
+     "unidade": "kg",
+     "valor": 4.9
+    },
+    "porcentagem_casca": {
+     "metodo": "opencv_otsu_casca_residual",
+     "unidade": "%",
+     "valor": 17.8
+    },
+    "tortuosidade": {
+     "metodo": "opencv_eixo_flecha",
+     "unidade": "indice",
+     "valor": 0.14
+    },
+    "volume_util": {
+     "metodo": "cilindro_medido",
+     "unidade": "m3",
+     "valor": 0.01
+    }
+   },
+   "marcador": false,
+   "motivo_sem_tora": "",
+   "resumo": "✅ [00000000] Clone=SP3108 status=aprovado saúde=100.00% compr=51.14cm diam=15.82cm densidade=490.0kg/m3 tortuosidade=0.14 casca=17.8% volume=0.01m3 massa=4.9kg defeitos=0 sem defeito",
+   "roi": [
+    0,
+    0,
+    640,
+    480
+   ],
+   "segmentacao": "fundo_escuro",
+   "status": "aprovado",
+   "vista": "lateral"
+  },
+  "lateral_com_casca+defeitos": {
+   "confianca_saude": 0.5238,
+   "contorno": {
+    "area": 52063.0,
+    "bbox": [
+     90,
+     167,
+     461,
+     147
+    ],
+    "pontos": 88
+   },
+   "defeitos": [
+    {
+     "altura": 36.0,
+     "area_relativa": 0.00469,
+     "confianca": 0.82,
+     "largura": 40.0,
+     "pos_x": 250.0,
+     "pos_y": 215.0,
+     "tipo_defeito": "Dead_Knot"
+    },
+    {
+     "altura": 34.0,
+     "area_relativa": 0.00376,
+     "confianca": 0.75,
+     "largura": 34.0,
+     "pos_x": 400.0,
+     "pos_y": 225.0,
+     "tipo_defeito": "Live_Knot"
+    },
+    {
+     "altura": 14.0,
+     "area_relativa": 0.00273,
+     "confianca": 0.71,
+     "largura": 60.0,
+     "pos_x": 300.0,
+     "pos_y": 234.0,
+     "tipo_defeito": "Crack"
+    }
+   ],
+   "descartados": [
+    {
+     "altura": 25.0,
+     "area_relativa": 0.00203,
+     "confianca": 0.91,
+     "largura": 25.0,
+     "pos_x": 20.0,
+     "pos_y": 20.0,
+     "tipo_defeito": "resin"
+    }
+   ],
+   "eh_tora": true,
+   "hud": [
+    "Status: REPROVADO | Clone: SP3108",
+    "Saude 52% | Casca 17.8% | Defeitos 3 (+1 ign.)",
+    "Lateral | Diam 15.8cm | Compr 51cm | Dens 490kg/m3 | Tort 0.1%",
+    "Escala: gsd_optica_generica (1.11 mm/px) | Seg: fundo_escuro | sem fundo de ref. (tecle b com a garra vazia)"
+   ],
+   "hud_md5": "932718efa835f46481771f95542a5f5d",
+   "indicadores": {
+    "altura": {
+     "metodo": "imagem_lateral_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 51.14
+    },
+    "apodrecimento_pragas": {
+     "metodo": "yolo_severidade",
+     "unidade": "%",
+     "valor": 52.38
+    },
+    "densidade": {
+     "metodo": "lookup_clone_SP3108",
+     "unidade": "kg/m3",
+     "valor": 490.0
+    },
+    "diametro": {
+     "metodo": "imagem_lateral_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 15.82
+    },
+    "massa_seca": {
+     "metodo": "volume_x_densidade_clone_SP3108",
+     "unidade": "kg",
+     "valor": 2.5
+    },
+    "porcentagem_casca": {
+     "metodo": "opencv_otsu_casca_residual",
+     "unidade": "%",
+     "valor": 17.8
+    },
+    "tortuosidade": {
+     "metodo": "opencv_eixo_flecha",
+     "unidade": "indice",
+     "valor": 0.14
+    },
+    "volume_util": {
+     "metodo": "cilindro_medido",
+     "unidade": "m3",
+     "valor": 0.005
+    }
+   },
+   "marcador": false,
+   "motivo_sem_tora": "",
+   "resumo": "❌ [00000000] Clone=SP3108 status=reprovado saúde=52.38% compr=51.14cm diam=15.82cm densidade=490.0kg/m3 tortuosidade=0.14 casca=17.8% volume=0.005m3 massa=2.5kg defeitos=3 pior=Dead_Knot(0.82) [ignorados=1]",
+   "roi": [
+    0,
+    0,
+    640,
+    480
+   ],
+   "segmentacao": "fundo_escuro",
+   "status": "reprovado",
+   "vista": "lateral"
+  },
+  "lateral_fundo_claro": {
+   "confianca_saude": 1.0,
+   "contorno": {
+    "area": 50899.0,
+    "bbox": [
+     91,
+     168,
+     459,
+     145
+    ],
+    "pontos": 81
+   },
+   "defeitos": [],
+   "descartados": [],
+   "eh_tora": true,
+   "hud": [
+    "Status: APROVADO | Clone: SP3108",
+    "Saude 100% | Casca 0.0% | Defeitos 0",
+    "Lateral | Diam 15.6cm | Compr 51cm | Dens 490kg/m3 | Tort 0.2%",
+    "Escala: gsd_optica_generica (1.11 mm/px) | Seg: cor | sem fundo de ref. (tecle b com a garra vazia)"
+   ],
+   "hud_md5": "7536ea4116a019f4ff099997b95e1ce2",
+   "indicadores": {
+    "altura": {
+     "metodo": "imagem_lateral_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 50.9
+    },
+    "apodrecimento_pragas": {
+     "metodo": "yolo_severidade",
+     "unidade": "%",
+     "valor": 100.0
+    },
+    "densidade": {
+     "metodo": "lookup_clone_SP3108",
+     "unidade": "kg/m3",
+     "valor": 490.0
+    },
+    "diametro": {
+     "metodo": "imagem_lateral_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 15.59
+    },
+    "massa_seca": {
+     "metodo": "volume_x_densidade_clone_SP3108",
+     "unidade": "kg",
+     "valor": 4.9
+    },
+    "porcentagem_casca": {
+     "metodo": "opencv_otsu_casca_residual",
+     "unidade": "%",
+     "valor": 0.0
+    },
+    "tortuosidade": {
+     "metodo": "opencv_eixo_flecha",
+     "unidade": "indice",
+     "valor": 0.19
+    },
+    "volume_util": {
+     "metodo": "cilindro_medido",
+     "unidade": "m3",
+     "valor": 0.01
+    }
+   },
+   "marcador": false,
+   "motivo_sem_tora": "",
+   "resumo": "✅ [00000000] Clone=SP3108 status=aprovado saúde=100.00% compr=50.9cm diam=15.59cm densidade=490.0kg/m3 tortuosidade=0.19 casca=0.0% volume=0.01m3 massa=4.9kg defeitos=0 sem defeito",
+   "roi": [
+    0,
+    0,
+    640,
+    480
+   ],
+   "segmentacao": "cor",
+   "status": "aprovado",
+   "vista": "lateral"
+  },
+  "lateral_fundo_claro+defeitos": {
+   "confianca_saude": 0.5238,
+   "contorno": {
+    "area": 50899.0,
+    "bbox": [
+     91,
+     168,
+     459,
+     145
+    ],
+    "pontos": 81
+   },
+   "defeitos": [
+    {
+     "altura": 36.0,
+     "area_relativa": 0.00469,
+     "confianca": 0.82,
+     "largura": 40.0,
+     "pos_x": 250.0,
+     "pos_y": 215.0,
+     "tipo_defeito": "Dead_Knot"
+    },
+    {
+     "altura": 34.0,
+     "area_relativa": 0.00376,
+     "confianca": 0.75,
+     "largura": 34.0,
+     "pos_x": 400.0,
+     "pos_y": 225.0,
+     "tipo_defeito": "Live_Knot"
+    },
+    {
+     "altura": 14.0,
+     "area_relativa": 0.00273,
+     "confianca": 0.71,
+     "largura": 60.0,
+     "pos_x": 300.0,
+     "pos_y": 234.0,
+     "tipo_defeito": "Crack"
+    }
+   ],
+   "descartados": [
+    {
+     "altura": 25.0,
+     "area_relativa": 0.00203,
+     "confianca": 0.91,
+     "largura": 25.0,
+     "pos_x": 20.0,
+     "pos_y": 20.0,
+     "tipo_defeito": "resin"
+    }
+   ],
+   "eh_tora": true,
+   "hud": [
+    "Status: REPROVADO | Clone: SP3108",
+    "Saude 52% | Casca 0.0% | Defeitos 3 (+1 ign.)",
+    "Lateral | Diam 15.6cm | Compr 51cm | Dens 490kg/m3 | Tort 0.2%",
+    "Escala: gsd_optica_generica (1.11 mm/px) | Seg: cor | sem fundo de ref. (tecle b com a garra vazia)"
+   ],
+   "hud_md5": "d7cca45eebac08cc01a5d20b5821d4e2",
+   "indicadores": {
+    "altura": {
+     "metodo": "imagem_lateral_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 50.9
+    },
+    "apodrecimento_pragas": {
+     "metodo": "yolo_severidade",
+     "unidade": "%",
+     "valor": 52.38
+    },
+    "densidade": {
+     "metodo": "lookup_clone_SP3108",
+     "unidade": "kg/m3",
+     "valor": 490.0
+    },
+    "diametro": {
+     "metodo": "imagem_lateral_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 15.59
+    },
+    "massa_seca": {
+     "metodo": "volume_x_densidade_clone_SP3108",
+     "unidade": "kg",
+     "valor": 2.5
+    },
+    "porcentagem_casca": {
+     "metodo": "opencv_otsu_casca_residual",
+     "unidade": "%",
+     "valor": 0.0
+    },
+    "tortuosidade": {
+     "metodo": "opencv_eixo_flecha",
+     "unidade": "indice",
+     "valor": 0.19
+    },
+    "volume_util": {
+     "metodo": "cilindro_medido",
+     "unidade": "m3",
+     "valor": 0.005
+    }
+   },
+   "marcador": false,
+   "motivo_sem_tora": "",
+   "resumo": "❌ [00000000] Clone=SP3108 status=reprovado saúde=52.38% compr=50.9cm diam=15.59cm densidade=490.0kg/m3 tortuosidade=0.19 casca=0.0% volume=0.005m3 massa=2.5kg defeitos=3 pior=Dead_Knot(0.82) [ignorados=1]",
+   "roi": [
+    0,
+    0,
+    640,
+    480
+   ],
+   "segmentacao": "cor",
+   "status": "reprovado",
+   "vista": "lateral"
+  },
+  "lateral_mesa_preta": {
+   "confianca_saude": 1.0,
+   "contorno": {
+    "area": 52063.0,
+    "bbox": [
+     90,
+     167,
+     461,
+     147
+    ],
+    "pontos": 88
+   },
+   "defeitos": [],
+   "descartados": [],
+   "eh_tora": true,
+   "hud": [
+    "Status: APROVADO | Clone: SP3108",
+    "Saude 100% | Casca 3.3% | Defeitos 0",
+    "Lateral | Diam 15.8cm | Compr 51cm | Dens 490kg/m3 | Tort 0.1%",
+    "Escala: gsd_optica_generica (1.11 mm/px) | Seg: fundo_escuro | sem fundo de ref. (tecle b com a garra vazia)"
+   ],
+   "hud_md5": "723631af35a98081a350b4476db65363",
+   "indicadores": {
+    "altura": {
+     "metodo": "imagem_lateral_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 51.14
+    },
+    "apodrecimento_pragas": {
+     "metodo": "yolo_severidade",
+     "unidade": "%",
+     "valor": 100.0
+    },
+    "densidade": {
+     "metodo": "lookup_clone_SP3108",
+     "unidade": "kg/m3",
+     "valor": 490.0
+    },
+    "diametro": {
+     "metodo": "imagem_lateral_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 15.82
+    },
+    "massa_seca": {
+     "metodo": "volume_x_densidade_clone_SP3108",
+     "unidade": "kg",
+     "valor": 4.9
+    },
+    "porcentagem_casca": {
+     "metodo": "opencv_otsu_casca_residual",
+     "unidade": "%",
+     "valor": 3.3
+    },
+    "tortuosidade": {
+     "metodo": "opencv_eixo_flecha",
+     "unidade": "indice",
+     "valor": 0.14
+    },
+    "volume_util": {
+     "metodo": "cilindro_medido",
+     "unidade": "m3",
+     "valor": 0.01
+    }
+   },
+   "marcador": false,
+   "motivo_sem_tora": "",
+   "resumo": "✅ [00000000] Clone=SP3108 status=aprovado saúde=100.00% compr=51.14cm diam=15.82cm densidade=490.0kg/m3 tortuosidade=0.14 casca=3.3% volume=0.01m3 massa=4.9kg defeitos=0 sem defeito",
+   "roi": [
+    0,
+    0,
+    640,
+    480
+   ],
+   "segmentacao": "fundo_escuro",
+   "status": "aprovado",
+   "vista": "lateral"
+  },
+  "lateral_mesa_preta+defeitos": {
+   "confianca_saude": 0.5238,
+   "contorno": {
+    "area": 52063.0,
+    "bbox": [
+     90,
+     167,
+     461,
+     147
+    ],
+    "pontos": 88
+   },
+   "defeitos": [
+    {
+     "altura": 36.0,
+     "area_relativa": 0.00469,
+     "confianca": 0.82,
+     "largura": 40.0,
+     "pos_x": 250.0,
+     "pos_y": 215.0,
+     "tipo_defeito": "Dead_Knot"
+    },
+    {
+     "altura": 34.0,
+     "area_relativa": 0.00376,
+     "confianca": 0.75,
+     "largura": 34.0,
+     "pos_x": 400.0,
+     "pos_y": 225.0,
+     "tipo_defeito": "Live_Knot"
+    },
+    {
+     "altura": 14.0,
+     "area_relativa": 0.00273,
+     "confianca": 0.71,
+     "largura": 60.0,
+     "pos_x": 300.0,
+     "pos_y": 234.0,
+     "tipo_defeito": "Crack"
+    }
+   ],
+   "descartados": [
+    {
+     "altura": 25.0,
+     "area_relativa": 0.00203,
+     "confianca": 0.91,
+     "largura": 25.0,
+     "pos_x": 20.0,
+     "pos_y": 20.0,
+     "tipo_defeito": "resin"
+    }
+   ],
+   "eh_tora": true,
+   "hud": [
+    "Status: REPROVADO | Clone: SP3108",
+    "Saude 52% | Casca 3.3% | Defeitos 3 (+1 ign.)",
+    "Lateral | Diam 15.8cm | Compr 51cm | Dens 490kg/m3 | Tort 0.1%",
+    "Escala: gsd_optica_generica (1.11 mm/px) | Seg: fundo_escuro | sem fundo de ref. (tecle b com a garra vazia)"
+   ],
+   "hud_md5": "bbd2f2a7619df51ad6debc888cbfcdbd",
+   "indicadores": {
+    "altura": {
+     "metodo": "imagem_lateral_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 51.14
+    },
+    "apodrecimento_pragas": {
+     "metodo": "yolo_severidade",
+     "unidade": "%",
+     "valor": 52.38
+    },
+    "densidade": {
+     "metodo": "lookup_clone_SP3108",
+     "unidade": "kg/m3",
+     "valor": 490.0
+    },
+    "diametro": {
+     "metodo": "imagem_lateral_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 15.82
+    },
+    "massa_seca": {
+     "metodo": "volume_x_densidade_clone_SP3108",
+     "unidade": "kg",
+     "valor": 2.5
+    },
+    "porcentagem_casca": {
+     "metodo": "opencv_otsu_casca_residual",
+     "unidade": "%",
+     "valor": 3.3
+    },
+    "tortuosidade": {
+     "metodo": "opencv_eixo_flecha",
+     "unidade": "indice",
+     "valor": 0.14
+    },
+    "volume_util": {
+     "metodo": "cilindro_medido",
+     "unidade": "m3",
+     "valor": 0.005
+    }
+   },
+   "marcador": false,
+   "motivo_sem_tora": "",
+   "resumo": "❌ [00000000] Clone=SP3108 status=reprovado saúde=52.38% compr=51.14cm diam=15.82cm densidade=490.0kg/m3 tortuosidade=0.14 casca=3.3% volume=0.005m3 massa=2.5kg defeitos=3 pior=Dead_Knot(0.82) [ignorados=1]",
+   "roi": [
+    0,
+    0,
+    640,
+    480
+   ],
+   "segmentacao": "fundo_escuro",
+   "status": "reprovado",
+   "vista": "lateral"
+  },
+  "mao": {
+   "confianca_saude": 1.0,
+   "contorno": null,
+   "defeitos": [],
+   "descartados": [],
+   "eh_tora": false,
+   "hud": [
+    "SEM TORA (pele 98%) | Clone: SP3108",
+    "Saude 100% | Casca 0.0% | Defeitos 0",
+    "Sem tora | Diam 53.2cm | Compr 600cm* | Dens 490kg/m3 | Tort n/a",
+    "Escala: gsd_optica_generica (1.11 mm/px) | Seg: - | sem fundo de ref. (tecle b com a garra vazia)  *comprimento de tracamento"
+   ],
+   "hud_md5": "a5ecf9675463ad0fafe57c369b0d7e84",
+   "indicadores": {
+    "altura": {
+     "metodo": "comprimento_tracamento_config",
+     "unidade": "cm",
+     "valor": 600.0
+    },
+    "apodrecimento_pragas": {
+     "metodo": "yolo_severidade",
+     "unidade": "%",
+     "valor": 100.0
+    },
+    "densidade": {
+     "metodo": "lookup_clone_SP3108",
+     "unidade": "kg/m3",
+     "valor": 490.0
+    },
+    "diametro": {
+     "metodo": "imagem_desconhecida_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 53.16
+    },
+    "massa_seca": {
+     "metodo": "volume_x_densidade_clone_SP3108",
+     "unidade": "kg",
+     "valor": 652.7
+    },
+    "porcentagem_casca": {
+     "metodo": "opencv_otsu_casca_residual",
+     "unidade": "%",
+     "valor": 0.0
+    },
+    "tortuosidade": {
+     "metodo": "nao_aplicavel_secao",
+     "unidade": "indice",
+     "valor": 0.0
+    },
+    "volume_util": {
+     "metodo": "cilindro_diam_medido_compr_config",
+     "unidade": "m3",
+     "valor": 1.332
+    }
+   },
+   "marcador": false,
+   "motivo_sem_tora": "pele 98%",
+   "roi": [
+    0,
+    0,
+    640,
+    480
+   ],
+   "segmentacao": "fundo_escuro",
+   "status": "sem_tora",
+   "vista": "desconhecida"
+  },
+  "mao+defeitos": {
+   "confianca_saude": 1.0,
+   "contorno": null,
+   "defeitos": [],
+   "descartados": [
+    {
+     "altura": 36.0,
+     "area_relativa": 0.00469,
+     "confianca": 0.82,
+     "largura": 40.0,
+     "pos_x": 250.0,
+     "pos_y": 215.0,
+     "tipo_defeito": "Dead_Knot"
+    },
+    {
+     "altura": 34.0,
+     "area_relativa": 0.00376,
+     "confianca": 0.75,
+     "largura": 34.0,
+     "pos_x": 400.0,
+     "pos_y": 225.0,
+     "tipo_defeito": "Live_Knot"
+    },
+    {
+     "altura": 25.0,
+     "area_relativa": 0.00203,
+     "confianca": 0.91,
+     "largura": 25.0,
+     "pos_x": 20.0,
+     "pos_y": 20.0,
+     "tipo_defeito": "resin"
+    },
+    {
+     "altura": 14.0,
+     "area_relativa": 0.00273,
+     "confianca": 0.71,
+     "largura": 60.0,
+     "pos_x": 300.0,
+     "pos_y": 234.0,
+     "tipo_defeito": "Crack"
+    }
+   ],
+   "eh_tora": false,
+   "hud": [
+    "SEM TORA (pele 98%) | Clone: SP3108",
+    "Saude 100% | Casca 0.0% | Defeitos 0 (+4 ign.)",
+    "Sem tora | Diam 53.2cm | Compr 600cm* | Dens 490kg/m3 | Tort n/a",
+    "Escala: gsd_optica_generica (1.11 mm/px) | Seg: - | sem fundo de ref. (tecle b com a garra vazia)  *comprimento de tracamento"
+   ],
+   "hud_md5": "4cd30d190c9f00dfb695a19bca7707c5",
+   "indicadores": {
+    "altura": {
+     "metodo": "comprimento_tracamento_config",
+     "unidade": "cm",
+     "valor": 600.0
+    },
+    "apodrecimento_pragas": {
+     "metodo": "yolo_severidade",
+     "unidade": "%",
+     "valor": 100.0
+    },
+    "densidade": {
+     "metodo": "lookup_clone_SP3108",
+     "unidade": "kg/m3",
+     "valor": 490.0
+    },
+    "diametro": {
+     "metodo": "imagem_desconhecida_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 53.16
+    },
+    "massa_seca": {
+     "metodo": "volume_x_densidade_clone_SP3108",
+     "unidade": "kg",
+     "valor": 652.7
+    },
+    "porcentagem_casca": {
+     "metodo": "opencv_otsu_casca_residual",
+     "unidade": "%",
+     "valor": 0.0
+    },
+    "tortuosidade": {
+     "metodo": "nao_aplicavel_secao",
+     "unidade": "indice",
+     "valor": 0.0
+    },
+    "volume_util": {
+     "metodo": "cilindro_diam_medido_compr_config",
+     "unidade": "m3",
+     "valor": 1.332
+    }
+   },
+   "marcador": false,
+   "motivo_sem_tora": "pele 98%",
+   "roi": [
+    0,
+    0,
+    640,
+    480
+   ],
+   "segmentacao": "fundo_escuro",
+   "status": "sem_tora",
+   "vista": "desconhecida"
+  },
+  "secao_mesa_preta": {
+   "confianca_saude": 1.0,
+   "contorno": {
+    "area": 71634.0,
+    "bbox": [
+     170,
+     90,
+     301,
+     301
+    ],
+    "pontos": 89
+   },
+   "defeitos": [],
+   "descartados": [],
+   "eh_tora": true,
+   "hud": [
+    "Status: APROVADO | Clone: SP3108",
+    "Saude 100% | Casca 2.2% | Defeitos 0",
+    "Secao | Diam 33.5cm | Compr 600cm* | Dens 490kg/m3 | Tort n/a",
+    "Escala: gsd_optica_generica (1.11 mm/px) | Seg: fundo_escuro | sem fundo de ref. (tecle b com a garra vazia)  *comprimento de tracamento"
+   ],
+   "hud_md5": "356ef1bdfdd2593166842888df172984",
+   "indicadores": {
+    "altura": {
+     "metodo": "comprimento_tracamento_config",
+     "unidade": "cm",
+     "valor": 600.0
+    },
+    "apodrecimento_pragas": {
+     "metodo": "yolo_severidade",
+     "unidade": "%",
+     "valor": 100.0
+    },
+    "densidade": {
+     "metodo": "lookup_clone_SP3108",
+     "unidade": "kg/m3",
+     "valor": 490.0
+    },
+    "diametro": {
+     "metodo": "imagem_secao_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 33.54
+    },
+    "massa_seca": {
+     "metodo": "volume_x_densidade_clone_SP3108",
+     "unidade": "kg",
+     "valor": 259.7
+    },
+    "porcentagem_casca": {
+     "metodo": "opencv_otsu_casca_residual",
+     "unidade": "%",
+     "valor": 2.2
+    },
+    "tortuosidade": {
+     "metodo": "nao_aplicavel_secao",
+     "unidade": "indice",
+     "valor": 0.0
+    },
+    "volume_util": {
+     "metodo": "cilindro_diam_medido_compr_config",
+     "unidade": "m3",
+     "valor": 0.53
+    }
+   },
+   "marcador": false,
+   "motivo_sem_tora": "",
+   "resumo": "✅ [00000000] Clone=SP3108 status=aprovado saúde=100.00% compr=600.0cm diam=33.54cm densidade=490.0kg/m3 tortuosidade=0.0 casca=2.2% volume=0.53m3 massa=259.7kg defeitos=0 sem defeito",
+   "roi": [
+    0,
+    0,
+    640,
+    480
+   ],
+   "segmentacao": "fundo_escuro",
+   "status": "aprovado",
+   "vista": "secao"
+  },
+  "secao_mesa_preta+defeitos": {
+   "confianca_saude": 0.5238,
+   "contorno": {
+    "area": 71634.0,
+    "bbox": [
+     170,
+     90,
+     301,
+     301
+    ],
+    "pontos": 89
+   },
+   "defeitos": [
+    {
+     "altura": 36.0,
+     "area_relativa": 0.00469,
+     "confianca": 0.82,
+     "largura": 40.0,
+     "pos_x": 250.0,
+     "pos_y": 215.0,
+     "tipo_defeito": "Dead_Knot"
+    },
+    {
+     "altura": 34.0,
+     "area_relativa": 0.00376,
+     "confianca": 0.75,
+     "largura": 34.0,
+     "pos_x": 400.0,
+     "pos_y": 225.0,
+     "tipo_defeito": "Live_Knot"
+    },
+    {
+     "altura": 14.0,
+     "area_relativa": 0.00273,
+     "confianca": 0.71,
+     "largura": 60.0,
+     "pos_x": 300.0,
+     "pos_y": 234.0,
+     "tipo_defeito": "Crack"
+    }
+   ],
+   "descartados": [
+    {
+     "altura": 25.0,
+     "area_relativa": 0.00203,
+     "confianca": 0.91,
+     "largura": 25.0,
+     "pos_x": 20.0,
+     "pos_y": 20.0,
+     "tipo_defeito": "resin"
+    }
+   ],
+   "eh_tora": true,
+   "hud": [
+    "Status: REPROVADO | Clone: SP3108",
+    "Saude 52% | Casca 2.2% | Defeitos 3 (+1 ign.)",
+    "Secao | Diam 33.5cm | Compr 600cm* | Dens 490kg/m3 | Tort n/a",
+    "Escala: gsd_optica_generica (1.11 mm/px) | Seg: fundo_escuro | sem fundo de ref. (tecle b com a garra vazia)  *comprimento de tracamento"
+   ],
+   "hud_md5": "b1cb064050c64b132af5870b145a8eb5",
+   "indicadores": {
+    "altura": {
+     "metodo": "comprimento_tracamento_config",
+     "unidade": "cm",
+     "valor": 600.0
+    },
+    "apodrecimento_pragas": {
+     "metodo": "yolo_severidade",
+     "unidade": "%",
+     "valor": 52.38
+    },
+    "densidade": {
+     "metodo": "lookup_clone_SP3108",
+     "unidade": "kg/m3",
+     "valor": 490.0
+    },
+    "diametro": {
+     "metodo": "imagem_secao_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 33.54
+    },
+    "massa_seca": {
+     "metodo": "volume_x_densidade_clone_SP3108",
+     "unidade": "kg",
+     "valor": 136.2
+    },
+    "porcentagem_casca": {
+     "metodo": "opencv_otsu_casca_residual",
+     "unidade": "%",
+     "valor": 2.2
+    },
+    "tortuosidade": {
+     "metodo": "nao_aplicavel_secao",
+     "unidade": "indice",
+     "valor": 0.0
+    },
+    "volume_util": {
+     "metodo": "cilindro_diam_medido_compr_config",
+     "unidade": "m3",
+     "valor": 0.278
+    }
+   },
+   "marcador": false,
+   "motivo_sem_tora": "",
+   "resumo": "❌ [00000000] Clone=SP3108 status=reprovado saúde=52.38% compr=600.0cm diam=33.54cm densidade=490.0kg/m3 tortuosidade=0.0 casca=2.2% volume=0.278m3 massa=136.2kg defeitos=3 pior=Dead_Knot(0.82) [ignorados=1]",
+   "roi": [
+    0,
+    0,
+    640,
+    480
+   ],
+   "segmentacao": "fundo_escuro",
+   "status": "reprovado",
+   "vista": "secao"
+  },
+  "tora_torta": {
+   "confianca_saude": 1.0,
+   "contorno": {
+    "area": 78356.5,
+    "bbox": [
+     45,
+     160,
+     551,
+     186
+    ],
+    "pontos": 54
+   },
+   "defeitos": [],
+   "descartados": [],
+   "eh_tora": true,
+   "hud": [
+    "Status: APROVADO | Clone: SP3108",
+    "Saude 100% | Casca 34.2% | Defeitos 0",
+    "Lateral | Diam 20.5cm | Compr 61cm | Dens 490kg/m3 | Tort 9.4%",
+    "Escala: gsd_optica_generica (1.11 mm/px) | Seg: fundo_escuro | sem fundo de ref. (tecle b com a garra vazia)"
+   ],
+   "hud_md5": "7399419412814579f6c175e6f6239204",
+   "indicadores": {
+    "altura": {
+     "metodo": "imagem_lateral_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 60.91
+    },
+    "apodrecimento_pragas": {
+     "metodo": "yolo_severidade",
+     "unidade": "%",
+     "valor": 100.0
+    },
+    "densidade": {
+     "metodo": "lookup_clone_SP3108",
+     "unidade": "kg/m3",
+     "valor": 490.0
+    },
+    "diametro": {
+     "metodo": "imagem_lateral_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 20.49
+    },
+    "massa_seca": {
+     "metodo": "volume_x_densidade_clone_SP3108",
+     "unidade": "kg",
+     "valor": 9.8
+    },
+    "porcentagem_casca": {
+     "metodo": "opencv_otsu_casca_residual",
+     "unidade": "%",
+     "valor": 34.2
+    },
+    "tortuosidade": {
+     "metodo": "opencv_eixo_flecha",
+     "unidade": "indice",
+     "valor": 9.38
+    },
+    "volume_util": {
+     "metodo": "cilindro_medido",
+     "unidade": "m3",
+     "valor": 0.02
+    }
+   },
+   "marcador": false,
+   "motivo_sem_tora": "",
+   "resumo": "✅ [00000000] Clone=SP3108 status=aprovado saúde=100.00% compr=60.91cm diam=20.49cm densidade=490.0kg/m3 tortuosidade=9.38 casca=34.2% volume=0.02m3 massa=9.8kg defeitos=0 sem defeito",
+   "roi": [
+    0,
+    0,
+    640,
+    480
+   ],
+   "segmentacao": "fundo_escuro",
+   "status": "aprovado",
+   "vista": "lateral"
+  },
+  "tora_torta+defeitos": {
+   "confianca_saude": 0.5238,
+   "contorno": {
+    "area": 78356.5,
+    "bbox": [
+     45,
+     160,
+     551,
+     186
+    ],
+    "pontos": 54
+   },
+   "defeitos": [
+    {
+     "altura": 36.0,
+     "area_relativa": 0.00469,
+     "confianca": 0.82,
+     "largura": 40.0,
+     "pos_x": 250.0,
+     "pos_y": 215.0,
+     "tipo_defeito": "Dead_Knot"
+    },
+    {
+     "altura": 34.0,
+     "area_relativa": 0.00376,
+     "confianca": 0.75,
+     "largura": 34.0,
+     "pos_x": 400.0,
+     "pos_y": 225.0,
+     "tipo_defeito": "Live_Knot"
+    },
+    {
+     "altura": 14.0,
+     "area_relativa": 0.00273,
+     "confianca": 0.71,
+     "largura": 60.0,
+     "pos_x": 300.0,
+     "pos_y": 234.0,
+     "tipo_defeito": "Crack"
+    }
+   ],
+   "descartados": [
+    {
+     "altura": 25.0,
+     "area_relativa": 0.00203,
+     "confianca": 0.91,
+     "largura": 25.0,
+     "pos_x": 20.0,
+     "pos_y": 20.0,
+     "tipo_defeito": "resin"
+    }
+   ],
+   "eh_tora": true,
+   "hud": [
+    "Status: REPROVADO | Clone: SP3108",
+    "Saude 52% | Casca 34.2% | Defeitos 3 (+1 ign.)",
+    "Lateral | Diam 20.5cm | Compr 61cm | Dens 490kg/m3 | Tort 9.4%",
+    "Escala: gsd_optica_generica (1.11 mm/px) | Seg: fundo_escuro | sem fundo de ref. (tecle b com a garra vazia)"
+   ],
+   "hud_md5": "f7f7d4d28376eb790691362dafe87fce",
+   "indicadores": {
+    "altura": {
+     "metodo": "imagem_lateral_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 60.91
+    },
+    "apodrecimento_pragas": {
+     "metodo": "yolo_severidade",
+     "unidade": "%",
+     "valor": 52.38
+    },
+    "densidade": {
+     "metodo": "lookup_clone_SP3108",
+     "unidade": "kg/m3",
+     "valor": 490.0
+    },
+    "diametro": {
+     "metodo": "imagem_lateral_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 20.49
+    },
+    "massa_seca": {
+     "metodo": "volume_x_densidade_clone_SP3108",
+     "unidade": "kg",
+     "valor": 5.4
+    },
+    "porcentagem_casca": {
+     "metodo": "opencv_otsu_casca_residual",
+     "unidade": "%",
+     "valor": 34.2
+    },
+    "tortuosidade": {
+     "metodo": "opencv_eixo_flecha",
+     "unidade": "indice",
+     "valor": 9.38
+    },
+    "volume_util": {
+     "metodo": "cilindro_medido",
+     "unidade": "m3",
+     "valor": 0.011
+    }
+   },
+   "marcador": false,
+   "motivo_sem_tora": "",
+   "resumo": "❌ [00000000] Clone=SP3108 status=reprovado saúde=52.38% compr=60.91cm diam=20.49cm densidade=490.0kg/m3 tortuosidade=9.38 casca=34.2% volume=0.011m3 massa=5.4kg defeitos=3 pior=Dead_Knot(0.82) [ignorados=1]",
+   "roi": [
+    0,
+    0,
+    640,
+    480
+   ],
+   "segmentacao": "fundo_escuro",
+   "status": "reprovado",
+   "vista": "lateral"
+  },
+  "vazio": {
+   "confianca_saude": 1.0,
+   "contorno": null,
+   "defeitos": [],
+   "descartados": [],
+   "eh_tora": false,
+   "hud": [
+    "SEM TORA (sem contorno) | Clone: SP3108",
+    "Saude 100% | Casca 0.0% | Defeitos 0",
+    "Sem tora | Diam 53.2cm | Compr 600cm* | Dens 490kg/m3 | Tort n/a",
+    "Escala: gsd_optica_generica (1.11 mm/px) | Seg: - | sem fundo de ref. (tecle b com a garra vazia)  *comprimento de tracamento"
+   ],
+   "hud_md5": "3541091b734855a6dd5b29cfb6424ab4",
+   "indicadores": {
+    "altura": {
+     "metodo": "comprimento_tracamento_config",
+     "unidade": "cm",
+     "valor": 600.0
+    },
+    "apodrecimento_pragas": {
+     "metodo": "yolo_severidade",
+     "unidade": "%",
+     "valor": 100.0
+    },
+    "densidade": {
+     "metodo": "lookup_clone_SP3108",
+     "unidade": "kg/m3",
+     "valor": 490.0
+    },
+    "diametro": {
+     "metodo": "imagem_desconhecida_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 53.16
+    },
+    "massa_seca": {
+     "metodo": "volume_x_densidade_clone_SP3108",
+     "unidade": "kg",
+     "valor": 652.7
+    },
+    "porcentagem_casca": {
+     "metodo": "opencv_otsu_casca_residual",
+     "unidade": "%",
+     "valor": 0.0
+    },
+    "tortuosidade": {
+     "metodo": "nao_aplicavel_secao",
+     "unidade": "indice",
+     "valor": 0.0
+    },
+    "volume_util": {
+     "metodo": "cilindro_diam_medido_compr_config",
+     "unidade": "m3",
+     "valor": 1.332
+    }
+   },
+   "marcador": false,
+   "motivo_sem_tora": "sem contorno",
+   "roi": [
+    0,
+    0,
+    640,
+    480
+   ],
+   "segmentacao": "nenhuma",
+   "status": "sem_tora",
+   "vista": "desconhecida"
+  },
+  "vazio+defeitos": {
+   "confianca_saude": 1.0,
+   "contorno": null,
+   "defeitos": [],
+   "descartados": [
+    {
+     "altura": 36.0,
+     "area_relativa": 0.00469,
+     "confianca": 0.82,
+     "largura": 40.0,
+     "pos_x": 250.0,
+     "pos_y": 215.0,
+     "tipo_defeito": "Dead_Knot"
+    },
+    {
+     "altura": 34.0,
+     "area_relativa": 0.00376,
+     "confianca": 0.75,
+     "largura": 34.0,
+     "pos_x": 400.0,
+     "pos_y": 225.0,
+     "tipo_defeito": "Live_Knot"
+    },
+    {
+     "altura": 25.0,
+     "area_relativa": 0.00203,
+     "confianca": 0.91,
+     "largura": 25.0,
+     "pos_x": 20.0,
+     "pos_y": 20.0,
+     "tipo_defeito": "resin"
+    },
+    {
+     "altura": 14.0,
+     "area_relativa": 0.00273,
+     "confianca": 0.71,
+     "largura": 60.0,
+     "pos_x": 300.0,
+     "pos_y": 234.0,
+     "tipo_defeito": "Crack"
+    }
+   ],
+   "eh_tora": false,
+   "hud": [
+    "SEM TORA (sem contorno) | Clone: SP3108",
+    "Saude 100% | Casca 0.0% | Defeitos 0 (+4 ign.)",
+    "Sem tora | Diam 53.2cm | Compr 600cm* | Dens 490kg/m3 | Tort n/a",
+    "Escala: gsd_optica_generica (1.11 mm/px) | Seg: - | sem fundo de ref. (tecle b com a garra vazia)  *comprimento de tracamento"
+   ],
+   "hud_md5": "580f69c99f27eec64939336e9a6ab356",
+   "indicadores": {
+    "altura": {
+     "metodo": "comprimento_tracamento_config",
+     "unidade": "cm",
+     "valor": 600.0
+    },
+    "apodrecimento_pragas": {
+     "metodo": "yolo_severidade",
+     "unidade": "%",
+     "valor": 100.0
+    },
+    "densidade": {
+     "metodo": "lookup_clone_SP3108",
+     "unidade": "kg/m3",
+     "valor": 490.0
+    },
+    "diametro": {
+     "metodo": "imagem_desconhecida_gsd_optica_generica",
+     "unidade": "cm",
+     "valor": 53.16
+    },
+    "massa_seca": {
+     "metodo": "volume_x_densidade_clone_SP3108",
+     "unidade": "kg",
+     "valor": 652.7
+    },
+    "porcentagem_casca": {
+     "metodo": "opencv_otsu_casca_residual",
+     "unidade": "%",
+     "valor": 0.0
+    },
+    "tortuosidade": {
+     "metodo": "nao_aplicavel_secao",
+     "unidade": "indice",
+     "valor": 0.0
+    },
+    "volume_util": {
+     "metodo": "cilindro_diam_medido_compr_config",
+     "unidade": "m3",
+     "valor": 1.332
+    }
+   },
+   "marcador": false,
+   "motivo_sem_tora": "sem contorno",
+   "roi": [
+    0,
+    0,
+    640,
+    480
+   ],
+   "segmentacao": "nenhuma",
+   "status": "sem_tora",
+   "vista": "desconhecida"
+  }
+ },
+ "rastreador_descricao": "Aguardando tora",
+ "severidade": {
+  "Crack": 0.5,
+  "Dead_Knot": 1.0,
+  "Live_Knot": 0.2,
+  "desconhecido": 0.5
+ }
+}

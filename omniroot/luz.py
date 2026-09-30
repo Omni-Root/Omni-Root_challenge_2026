@@ -12,21 +12,24 @@ análise, cada quadro passa por:
                mesa preta/garra, é a madeira iluminada, não o fundo);
        ruido:  desvio do ruído do sensor (método de Immerkær, 1996) — câmera
                no escuro sobe o ganho sozinha e a imagem "clara" vem granulada.
-     -> nível "boa" / "baixa" / "insuficiente" (com histerese, para não piscar).
+     -> nível "boa" / "baixa" / "critica" (com histerese, para não piscar).
 
-  2. REALCE, só em luz baixa:
+  2. REALCE, em luz baixa ou crítica:
        - empilhamento: média dos últimos quadros da tora PARADA (até N). O
          ruído cai ~raiz(N). Se a cena mexe (tora entrando/girando), zera e
          recomeça — nunca borra movimento;
        - ganho multiplicando B, G e R igualmente: clareia SEM mudar matiz nem
          saturação (o portão e a casca dependem de cor). Limitado.
 
-  3. PORTÃO DE LUZ — em luz insuficiente o main.py NÃO mede ("SEM MEDIDA:
-     luz insuficiente"): número errado é pior que nenhum número.
+  3. NUNCA RECUSA POR LUZ — a tora é colhida de qualquer jeito; se não for
+     registrada, o inventário deixa de ser "100% das toras". Quem decide se
+     há tora é o portão "é madeira?" (no escuro total ele mesmo não acha
+     contorno). Em luz crítica a tora é MEDIDA e marcada como de baixa
+     confiança — o dashboard mostra e não dispara alerta só com ela.
 
-  4. PROVENIÊNCIA — tora medida em luz baixa grava o sufixo "_luz_baixa" no
-     método de medição dos indicadores de imagem (como a densidade diz de
-     onde veio e a posição diz a fonte).
+  4. PROVENIÊNCIA — o sufixo "_luz_baixa" ou "_luz_critica" vai no método
+     de medição dos indicadores de imagem (como a densidade diz de onde veio
+     e a posição diz a fonte).
 
 Os limiares são pontos de partida, não verdade: o HUD mostra brilho e ruído
 medidos para calibrar na bancada (config.json: luz_*).
@@ -37,7 +40,7 @@ import math
 import cv2
 import numpy as np
 
-NIVEIS = ("boa", "baixa", "insuficiente")
+NIVEIS = ("boa", "baixa", "critica")
 
 # Kernel do estimador de ruído de Immerkær (anula imagem suave, sobra o ruído).
 _KERNEL_RUIDO = np.array([[1, -2, 1], [-2, 4, -2], [1, -2, 1]], dtype=np.float32)
@@ -56,25 +59,40 @@ def medir_luz(frame: np.ndarray) -> tuple[float, float]:
     return brilho, ruido
 
 
+def nivel_do_evento(niveis: list[str]) -> str:
+    """
+    Nível de luz de uma tora a partir dos níveis dos seus quadros: "critica"
+    se a maioria foi crítica; "baixa" se a maioria foi baixa OU crítica;
+    senão "boa". (Uma tora com metade dos quadros em luz ruim não é de luz boa.)
+    """
+    if not niveis:
+        return "boa"
+    if niveis.count("critica") * 2 > len(niveis):
+        return "critica"
+    if (niveis.count("baixa") + niveis.count("critica")) * 2 > len(niveis):
+        return "baixa"
+    return "boa"
+
+
 class RealceLuz:
-    """Mede a luz, realça em luz baixa e informa o nível. Um por câmera, na thread de captura."""
+    """Mede a luz, realça quando ela está ruim e informa o nível. Um por câmera, na thread de captura."""
 
     def __init__(
         self,
         ligado: bool = True,
-        limiar_boa: float = 90.0,          # brilho (p95, 0-255) a partir do qual a luz é "boa"
-        limiar_insuficiente: float = 20.0,  # abaixo disso: não mede
-        ruido_baixa: float = 6.0,          # ruído acima disso já conta como luz baixa (câmera no ganho alto)
-        ruido_insuficiente: float = 16.0,  # ruído acima disso: imagem inutilizável
+        limiar_boa: float = 90.0,      # brilho (p95, 0-255) a partir do qual a luz é "boa"
+        limiar_critica: float = 20.0,  # abaixo disso: luz crítica (mede, com baixa confiança)
+        ruido_baixa: float = 6.0,      # ruído acima disso já conta como luz baixa (câmera no ganho alto)
+        ruido_critico: float = 16.0,   # ruído acima disso: luz crítica
         ganho_max: float = 4.0,
         alvo_brilho: float = 170.0,
         empilhar_max: int = 8,
     ):
         self.ligado = ligado
         self.limiar_boa = limiar_boa
-        self.limiar_insuficiente = limiar_insuficiente
+        self.limiar_critica = limiar_critica
         self.ruido_baixa = ruido_baixa
-        self.ruido_insuficiente = ruido_insuficiente
+        self.ruido_critico = ruido_critico
         self.ganho_max = ganho_max
         self.alvo_brilho = alvo_brilho
         self.empilhar_max = max(1, int(empilhar_max))
@@ -90,11 +108,11 @@ class RealceLuz:
 
     def _classificar(self, brilho: float, ruido: float) -> str:
         """Nível com histerese de 10%: perto do limiar ele não fica trocando a cada quadro."""
-        folga = 1.10 if self.nivel != "boa" else 1.0  # para VOLTAR a "boa" precisa passar 10% acima
-        if brilho < self.limiar_insuficiente * (1.10 if self.nivel == "insuficiente" else 1.0) \
-                or ruido > self.ruido_insuficiente:
-            return "insuficiente"
-        if brilho < self.limiar_boa * folga or ruido > self.ruido_baixa:
+        folga_critica = 1.10 if self.nivel == "critica" else 1.0  # para SAIR de crítica precisa passar 10% acima
+        folga_boa = 1.10 if self.nivel != "boa" else 1.0          # para VOLTAR a boa, idem
+        if brilho < self.limiar_critica * folga_critica or ruido > self.ruido_critico:
+            return "critica"
+        if brilho < self.limiar_boa * folga_boa or ruido > self.ruido_baixa:
             return "baixa"
         return "boa"
 
@@ -128,7 +146,7 @@ class RealceLuz:
     # ---------- interface ----------
 
     def processar(self, frame: np.ndarray) -> np.ndarray:
-        """Mede e, se a luz estiver baixa, devolve o quadro realçado (senão, o próprio)."""
+        """Mede e, se a luz estiver ruim, devolve o quadro realçado (senão, o próprio)."""
         if frame is None or not self.ligado:
             return frame
         brilho, ruido = medir_luz(frame)
@@ -167,8 +185,9 @@ def descrever_luz(estado: dict | None) -> str:
     if not estado or not estado.get("ligado"):
         return "Luz: realce desligado"
     base = f"Luz: {estado['nivel'].upper()} (brilho {estado['brilho']:.0f}, ruido {estado['ruido']:.1f})"
-    if estado["nivel"] == "baixa":
-        return base + f" | realce: ganho {estado['ganho']:.1f}x, {estado['empilhados']} quadros empilhados"
-    if estado["nivel"] == "insuficiente":
-        return base + " | NAO MEDE - ilumine a tora"
-    return base
+    if estado["nivel"] == "boa":
+        return base
+    realce = f" | realce: ganho {estado['ganho']:.1f}x, {estado['empilhados']} quadros"
+    if estado["nivel"] == "critica":
+        return base + realce + " | BAIXA CONFIANCA - ilumine a tora"
+    return base + realce
