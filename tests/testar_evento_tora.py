@@ -19,7 +19,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from main import Config, RastreadorTora, consolidar_defeitos  # noqa: E402
+from omniroot.config import Config  # noqa: E402
+from omniroot.evento import RastreadorTora, consolidar_defeitos  # noqa: E402
 
 
 def contorno_rect(x, y, w, h):

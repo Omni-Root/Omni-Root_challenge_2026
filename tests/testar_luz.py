@@ -4,16 +4,18 @@ testar_luz.py — pouca luz (omniroot/luz.py) com cenas sintéticas, sem câmera
 A mesma "tora" (elipse cor de madeira sobre mesa preta) em três condições:
   - luz boa;
   - luz BAIXA: cena escurecida para 30% + ruído de sensor (câmera no ganho alto);
-  - luz INSUFICIENTE: cena a 7% + ruído.
+  - luz CRÍTICA: cena a 7% + ruído (mede, com baixa confiança).
 
 Verifica:
-  1. o medidor classifica cada condição (boa / baixa / insuficiente);
+  1. o medidor classifica cada condição (boa / baixa / critica);
   2. em luz boa o quadro passa intacto;
   3. em luz baixa o realce (empilhamento + ganho) reduz o ruído e PRESERVA a
      cor da madeira (matiz), e o pipeline REAL do main.py (segmentação +
      portão "é madeira?") volta a reconhecer a tora;
   4. movimento zera o empilhamento (não borra tora entrando);
-  5. o evento consolidado em luz baixa marca "_luz_baixa" nos métodos.
+  5. o evento consolidado em luz baixa marca "_luz_baixa" nos métodos;
+  7. textura (fundo estampado) não conta como ruído: luz boa fica "boa";
+  8. o ruído tem histerese, como o brilho.
 
 É cena sintética: prova a lógica, não substitui o teste de bancada
 (apagar a luz com a webcam e calibrar os limiares luz_* no config.json).
@@ -30,8 +32,10 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from omniroot.luz import RealceLuz, medir_luz  # noqa: E402
-from main import Config, consolidar_evento, segmentar_tora_origem, validar_tora  # noqa: E402
+from omniroot.luz import RealceLuz, cinza_para_ruido, medir_luz, nivel_do_evento, ruido_temporal  # noqa: E402
+from omniroot.config import Config  # noqa: E402
+from omniroot.evento import consolidar_evento  # noqa: E402
+from omniroot.segmentacao import segmentar_tora_origem, validar_tora  # noqa: E402
 
 
 def cena(fator: float, sigma_ruido: float, seed: int = 0, dx: int = 0) -> np.ndarray:
@@ -74,13 +78,13 @@ def main() -> int:
 
     def realce_novo() -> RealceLuz:
         return RealceLuz(
-            limiar_boa=cfg.luz_limiar_boa, limiar_insuficiente=cfg.luz_limiar_insuficiente,
-            ruido_baixa=cfg.luz_ruido_baixa, ruido_insuficiente=cfg.luz_ruido_insuficiente,
+            limiar_boa=cfg.luz_limiar_boa, limiar_critica=cfg.luz_limiar_critica,
+            ruido_baixa=cfg.luz_ruido_baixa, ruido_critico=cfg.luz_ruido_critico,
             ganho_max=cfg.luz_ganho_max, empilhar_max=cfg.luz_empilhar_max,
         )
 
     print("1) medidor")
-    for nome, fator, sigma, esperado in [("boa", 1.0, 2.0, "boa"), ("baixa", 0.30, 5.0, "baixa"), ("insuficiente", 0.07, 5.0, "insuficiente")]:
+    for nome, fator, sigma, esperado in [("boa", 1.0, 2.0, "boa"), ("baixa", 0.30, 5.0, "baixa"), ("critica", 0.07, 5.0, "critica")]:
         r = realce_novo()
         for i in range(10):
             r.processar(cena(fator, sigma, seed=i))
@@ -153,6 +157,66 @@ def main() -> int:
     checar(not ind["densidade"]["metodo"].endswith("_luz_baixa"), "densidade (não vem da imagem) não é marcada")
     checar(ev_boa["luz"] == "boa" and not ev_boa["indicadores"]["porcentagem_casca"]["metodo"].endswith("_luz_baixa"),
            "evento em luz boa não é marcado")
+    ev_critica = consolidar_evento([{**base, "luz": "critica"}] * 3 + [{**base, "luz": "baixa"}] * 2, cfg)
+    checar(ev_critica["luz"] == "critica"
+           and ev_critica["indicadores"]["porcentagem_casca"]["metodo"] == "opencv_otsu_casca_residual_luz_critica",
+           "evento em luz crítica é MEDIDO e marcado _luz_critica (não recusado)")
+
+    print("6) nível da tora a partir dos quadros")
+    checar(nivel_do_evento(["boa"] * 3 + ["critica"] * 2) == "boa", "3 boa + 2 crítica -> boa")
+    checar(nivel_do_evento(["boa"] * 2 + ["critica"] * 2 + ["baixa"]) == "baixa",
+           "2 boa + 2 crítica + 1 baixa -> baixa (maioria em luz ruim, mas não maioria crítica)")
+    checar(nivel_do_evento(["critica"] * 3 + ["boa"] * 2) == "critica", "maioria crítica -> critica")
+    checar(nivel_do_evento([]) == "boa", "sem quadros -> boa")
+
+    print("7) textura não é ruído (fundo estampado com luz boa)")
+    # Antes, o ruído era medido num quadro só (Immerkær): pano estampado e
+    # anéis da madeira contavam como ruído, a luz boa virava "baixa", o
+    # empilhamento ligava à toa e o nível alternava perto do limiar.
+    padrao = np.random.default_rng(7).uniform(-45, 45, (480, 640, 3)).astype(np.float32)  # estampa fina, fixa
+
+    def cena_estampada(sigma: float, seed: int, dx: int = 0) -> np.ndarray:
+        img = np.array([150, 110, 120], np.float32) + padrao
+        m = np.zeros((480, 640), np.uint8)
+        cv2.circle(m, (320 + dx, 240), 150, 255, -1)
+        img[m > 0] = np.array([150, 185, 205], np.float32) + 0.5 * padrao[m > 0]
+        img += np.random.default_rng(seed).normal(0, sigma, img.shape)
+        return np.clip(img, 0, 255).astype(np.uint8)
+
+    _, ruido_espacial = medir_luz(cena_estampada(2.0, 1))
+    checar(ruido_espacial > cfg.luz_ruido_baixa,
+           f"a cena é a armadilha: o medidor espacial lê {ruido_espacial:.1f} (> {cfg.luz_ruido_baixa}) com ruído real baixo")
+    r = realce_novo()
+    niveis, intactos = [], True
+    for i in range(30):
+        q = cena_estampada(2.0, 800 + i)
+        s = r.processar(q)
+        if i > 0:
+            niveis.append(r.nivel)
+            intactos &= np.array_equal(s, q)
+    checar(set(niveis) == {"boa"} and intactos,
+           f"luz boa com fundo estampado: 'boa' em {niveis.count('boa')}/29 quadros, sem realce (ruído medido {r.estado['ruido']:.1f})")
+    r = realce_novo()
+    for i in range(30):
+        r.processar(cena_estampada(2.0, 900 + i, dx=4 * i))  # a rodela desliza 4 px por quadro
+    checar(r.nivel == "boa", f"tora mexendo sobre o fundo estampado continua 'boa' (ruído {r.estado['ruido']:.1f})")
+    r = realce_novo()
+    for i in range(15):
+        r.processar(cena_estampada(14.0, 950 + i))
+    checar(r.nivel == "baixa", f"ruído de sensor de verdade (ganho alto) ainda vira 'baixa' (ruído {r.estado['ruido']:.1f})")
+    # Mesma escala do limiar de antes: em ruído puro sobre fundo liso, o temporal ≈ o espacial.
+    liso = [np.clip(120 + np.random.default_rng(s).normal(0, 8, (480, 640, 3)), 0, 255).astype(np.uint8) for s in (1, 2)]
+    temporal = ruido_temporal(cinza_para_ruido(liso[1]), cinza_para_ruido(liso[0]))
+    espacial = medir_luz(liso[1])[1]
+    checar(abs(temporal - espacial) / espacial < 0.15,
+           f"escala preservada (limiares luz_ruido_* continuam valendo): temporal {temporal:.2f} vs espacial {espacial:.2f}")
+
+    print("8) histerese no ruído")
+    r = realce_novo()
+    r.nivel = "baixa"
+    checar(r._classificar(200.0, cfg.luz_ruido_baixa * 0.95) == "baixa",
+           "ruído 5% abaixo do limiar não basta para voltar a 'boa' (precisa de 10%)")
+    checar(r._classificar(200.0, cfg.luz_ruido_baixa * 0.85) == "boa", "ruído 15% abaixo: volta a 'boa'")
 
     print()
     print("TUDO OK" if falhas == 0 else f"{falhas} FALHA(S)")
