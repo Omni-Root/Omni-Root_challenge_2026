@@ -40,6 +40,11 @@ FONTE_SERIAL = "gnss_serial"
 FONTE_LOG = "gnss_log"
 FONTE_WINDOWS = "windows_localizacao"
 ORIGEM_WINDOWS = "windows"  # valor de --gnss / gnss_porta que liga a Localização do Windows
+ORIGEM_AUTO = "auto"        # procura sozinho a porta serial que está falando NMEA (o COM muda de USB para USB)
+
+# Velocidades testadas na procura automática, da mais comum para a menos.
+# (Receptor USB nativo — ex. u-blox — ignora a velocidade; adaptador serial não.)
+BAUDS_PROCURA = (9600, 38400, 115200, 4800)
 
 # Lê a Localização do Windows (API System.Device, presente em todo Windows
 # 10/11 com o PowerShell 5.1) e escreve UMA linha por segundo:
@@ -160,6 +165,43 @@ def ler_sentenca(linha: str) -> dict | None:
     return None
 
 
+def parece_nmea(linhas: list[str], minimo: int = 2) -> bool:
+    """Pelo menos `minimo` sentenças NMEA íntegras (checksum certo): é um receptor GNSS."""
+    return sum(1 for linha in linhas if checksum_ok(linha)) >= minimo
+
+
+def procurar_porta_gnss(portas: list[str] | None = None, abrir=None, espera_s: float = 2.5) -> tuple[str, int] | None:
+    """
+    Procura a porta serial que está mandando NMEA: abre cada porta em cada
+    velocidade de BAUDS_PROCURA e escuta até `espera_s`. Devolve (porta, baud)
+    ou None. `portas`/`abrir` existem para o teste (sem hardware).
+    """
+    if portas is None:
+        from serial.tools import list_ports
+        portas = [p.device for p in list_ports.comports()]
+    if abrir is None:
+        import serial
+
+        def abrir(porta, baud):
+            return serial.Serial(porta, baud, timeout=0.5)
+
+    for porta in portas:
+        for baud in BAUDS_PROCURA:
+            try:
+                with abrir(porta, baud) as s:
+                    linhas: list[str] = []
+                    fim = time.monotonic() + espera_s
+                    while time.monotonic() < fim:
+                        bruto = s.readline()
+                        if bruto:
+                            linhas.append(bruto.decode("ascii", errors="ignore"))
+                            if parece_nmea(linhas):
+                                return porta, baud
+            except Exception:
+                break  # porta ocupada/inexistente: nenhuma velocidade vai abrir — próxima porta
+    return None
+
+
 def _segundos_do_dia(hora: str | None) -> float | None:
     """'hhmmss.ss' -> segundos desde 00:00 (para reproduzir um log no ritmo original)."""
     if not hora or len(hora) < 6:
@@ -185,7 +227,9 @@ class LeitorPosicao:
         self.origem = origem
         self.baud = baud
         self.e_windows = origem.strip().lower() == ORIGEM_WINDOWS
-        self.e_arquivo = not self.e_windows and Path(origem).is_file()
+        self.e_auto = origem.strip().lower() == ORIGEM_AUTO
+        self.e_arquivo = not self.e_windows and not self.e_auto and Path(origem).is_file()
+        self.porta_detectada: str | None = None  # com "auto": a porta que a procura achou
         if self.e_windows:
             self.fonte = FONTE_WINDOWS
         else:
@@ -224,10 +268,18 @@ class LeitorPosicao:
                 return None
             return {**self._ultima, "idade_s": round(idade, 1)}
 
+    def estado(self) -> str:
+        """iniciando / sem_fix / ok / sem_receptor — enviado ao dashboard quando não há posição."""
+        with self._lock:
+            return self._estado
+
     def descricao(self, validade_s: float) -> str:
         """Linha de HUD (só ASCII: o cv2.putText não desenha acentos)."""
         p = self.atual(validade_s)
-        rotulo = "log gravado" if self.e_arquivo else "Windows (Wi-Fi)" if self.e_windows else self.origem
+        if self.e_auto:
+            rotulo = self.porta_detectada or "procurando porta"
+        else:
+            rotulo = "log gravado" if self.e_arquivo else "Windows (Wi-Fi)" if self.e_windows else self.origem
         if p is not None:
             extra = ""
             if p.get("precisao_m") is not None:
@@ -327,6 +379,13 @@ class LeitorPosicao:
                     self._ler_windows()
                 elif self.e_arquivo:
                     self._reproduzir_arquivo()
+                elif self.e_auto:
+                    self.porta_detectada = None  # (re)procura: o receptor pode ter mudado de porta
+                    achou = procurar_porta_gnss()
+                    if achou is None:
+                        raise RuntimeError("nenhuma porta serial mandando NMEA (receptor desconectado?)")
+                    self.porta_detectada, baud = achou
+                    self._ler_serial(self.porta_detectada, baud)
                 else:
                     self._ler_serial()
             except ImportError:
@@ -344,11 +403,13 @@ class LeitorPosicao:
                 )
                 self._parar.wait(3.0)
 
-    def _ler_serial(self) -> None:
+    def _ler_serial(self, porta_nome: str | None = None, baud: int | None = None) -> None:
         import serial  # só aqui: sem receptor configurado, o pyserial nem é necessário
 
-        with serial.Serial(self.origem, self.baud, timeout=1.0) as porta:
-            print(f"🛰️  GNSS conectado em {self.origem} ({self.baud} baud).")
+        porta_nome = porta_nome or self.origem
+        baud = baud or self.baud
+        with serial.Serial(porta_nome, baud, timeout=1.0) as porta:
+            print(f"🛰️  GNSS conectado em {porta_nome} ({baud} baud).")
             with self._lock:
                 if self._estado == "sem_receptor":
                     self._estado = "iniciando"
@@ -409,3 +470,56 @@ class LeitorPosicao:
                         hora_anterior = agora
             if lidas == 0:
                 raise ValueError("nenhuma sentença GGA/RMC válida no arquivo")
+
+
+# ============================================================
+# PRIORIDADE: GNSS primeiro, outra fonte de reserva
+# ============================================================
+
+class PosicaoComReserva:
+    """
+    Duas fontes ao mesmo tempo, com prioridade: vale a `principal` (o GNSS)
+    sempre que ela tem posição válida; sem fix, desconectada ou ainda
+    procurando a porta, vale a `reserva` (a Localização do Windows). Cada
+    posição continua levando a própria "fonte", então o banco e o dashboard
+    sabem se aquela tora/ponto veio do GNSS ou do Wi-Fi — nada é misturado.
+
+    Mesma interface do LeitorPosicao (atual/estado/descricao/fonte/parar):
+    o main.py e a telemetria não precisam saber que são duas.
+    """
+
+    def __init__(self, principal: LeitorPosicao, reserva: LeitorPosicao):
+        self.principal = principal
+        self.reserva = reserva
+        self._validade_s = 5.0  # a última usada em atual(); serve a `fonte`/`estado`
+
+    def iniciar(self) -> "PosicaoComReserva":
+        self.principal.iniciar()
+        self.reserva.iniciar()
+        return self
+
+    def parar(self, timeout_s: float = 2.0) -> None:
+        self.principal.parar(timeout_s)
+        self.reserva.parar(timeout_s)
+
+    def atual(self, validade_s: float) -> dict | None:
+        self._validade_s = validade_s
+        p = self.principal.atual(validade_s)
+        return p if p is not None else self.reserva.atual(validade_s)
+
+    def _em_uso(self) -> LeitorPosicao:
+        return self.principal if self.principal.atual(self._validade_s) is not None else self.reserva
+
+    @property
+    def fonte(self) -> str:
+        return self._em_uso().fonte
+
+    def estado(self) -> str:
+        return self._em_uso().estado()
+
+    def descricao(self, validade_s: float) -> str:
+        """HUD: a fonte em uso; na reserva, diz por que o GNSS não está valendo."""
+        if self.principal.atual(validade_s) is not None:
+            return self.principal.descricao(validade_s)
+        motivo = {"sem_fix": "sem fix", "sem_receptor": "sem receptor"}.get(self.principal.estado(), "aguardando")
+        return f"{self.reserva.descricao(validade_s)} [reserva: GNSS {motivo}]"

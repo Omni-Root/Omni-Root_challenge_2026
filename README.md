@@ -204,6 +204,46 @@ só recua e tenta de novo; captura, modelo e SQLite nunca esperam por ela. No
 painel, máquina sem rede aparece como **"Sem sinal"** com o último quadro
 escurecido. `stream_url` vazio desliga.
 
+### Frota: posição em tempo real e trajeto (opcional)
+
+Com uma fonte de posição ligada (`gnss_porta`), o `main.py` sobe a thread de
+frota (`omniroot/telemetria.py`), que faz duas coisas:
+
+- **Tempo real** (com rede): a cada 2 s manda a posição atual ao dashboard,
+  identificada pelo **SN** (`maquina_id`), com o mesmo `STREAM_TOKEN` da câmera.
+  No mapa "Onde agir" cada máquina aparece pelo SN — "ao vivo" ou, sem rede,
+  em cinza com "sem sinal · posição há X min".
+- **Trajeto** (com ou sem rede): grava pontos em `rastro_local` no SQLite; o
+  `sync_daemon.py` manda para `rastro_maquinas` no Postgres e o dashboard
+  desenha a linha — o trecho percorrido offline aparece quando a rede volta.
+
+Exige o `setup_completo.sql` reaplicado (cria `rastro_maquinas`). A fonte de
+posição é a mesma das toras. O `config.json` já vem com o **módulo GNSS com
+prioridade** e a Localização do Windows de reserva:
+
+```json
+"gnss_porta": "auto",
+"gnss_reserva": "windows"
+```
+
+- `"auto"` procura sozinho a porta que está mandando NMEA (o número do COM
+  muda quando o receptor troca de USB). Testado com receptor u-blox (USB).
+- Enquanto o GNSS tem fix, vale ele (fonte "GNSS", com HDOP e satélites); sem
+  fix ou desconectado, vale o Windows — e cada tora/ponto guarda de qual veio.
+- Precisa do `pyserial` (`pip install -r requirements.txt`).
+- O HUD mostra `GNSS: lat, lon | HDOP | sat | COM13` — ou, na reserva,
+  `... [reserva: GNSS sem fix]`.
+
+O trajeto só cresce com a máquina **andando**: um ponto a cada 5 s se ela
+andou 20 m (ou a precisão informada, se maior). Parado, o GNSS "passeia" —
+em ambiente fechado, 10–12 m — e isso não vira rota. No mapa, a linha
+**contínua** é o caminho registrado; a **tracejada** liga a posição anterior
+(de outro momento) à atual, onde não há registro do caminho.
+
+Sem módulo, dá para ver a máquina andando com a trilha NMEA gravada:
+`python main.py --gnss tests\trilha_teste_sintetica.nmea` (o mesmo código de
+leitura do GNSS; o dashboard declara a fonte como "Trilha gravada").
+
 ### Fine-tuning de eucalipto (ver seção 8)
 
 ```powershell
@@ -228,8 +268,12 @@ Lê as mesmas variáveis do `.env`. Na primeira subida, aplica
 de pé, o mesmo arquivo aplica mudanças sem apagar nem duplicar nada:
 
 ```powershell
-Get-Content "Banco de dados\setup_completo.sql" | docker compose exec -T postgres psql -U postgres -d desafio_madeira
+cmd /c 'docker compose exec -T postgres psql -U postgres -d desafio_madeira < "Banco de dados\setup_completo.sql"'
 ```
+
+(No Git Bash: o mesmo comando sem o `cmd /c '...'`.) Não use
+`Get-Content ... | docker ...`: o PowerShell 5.1 troca os acentos por `?` no
+pipe e o seed criaria um "Talh?o Demo" duplicado.
 
 ### Sincronizar campo → central
 
@@ -264,6 +308,7 @@ python tests\testar_equivalencia.py     # o pipeline inteiro continua idêntico 
 python tests\testar_evento_tora.py      # uma tora = um registro
 python tests\testar_luz.py              # pouca luz: medidor, realce, proveniência
 python tests\testar_posicao.py          # GNSS/NMEA, Localização do Windows, migração do SQLite
+python tests\testar_telemetria.py       # frota: posição ao vivo pelo SN + trajeto gravado com e sem rede
 python tests\testar_densidade_clones.py # densidade por clone vinda do cache sincronizado
 ```
 
@@ -293,6 +338,7 @@ A lógica vive no pacote `omniroot/`, um módulo por responsabilidade:
 | `registro.py` | Gravação no SQLite local (tora, indicadores, defeitos, posição) |
 | `banco_local.py` | Schema/migração compartilhados com o `sync_daemon.py` |
 | `posicao.py` | Posição da máquina: GNSS (NMEA serial/arquivo) ou Localização do Windows |
+| `telemetria.py` | Frota: posição ao vivo no dashboard (identificada pelo SN) e trajeto no SQLite, com ou sem rede |
 | `hud.py` / `stream.py` | Desenho na tela do operador / câmera ao vivo no dashboard |
 
 Os nomes continuam importáveis de `main` (compatibilidade), mas o código novo
@@ -402,7 +448,10 @@ Identidade da máquina e do talhão, clone, caminhos, limiares da IA
 | `evento_iou_troca` / `evento_frames_troca` | Contorno com IoU abaixo disso por tantos quadros = outra tora entrou sem gap. |
 | `evento_defeito_min_quadros` | Defeito precisa aparecer em N quadros do evento para entrar no registro. |
 | `stream_url`, `stream_fps`, `stream_largura_px`, `stream_jpeg_qualidade` | Câmera ao vivo no dashboard (seção 3). URL vazia desliga; token em `STREAM_TOKEN` no `.env`. |
-| `gnss_porta` / `gnss_baud` / `gnss_arquivo` / `gnss_validade_s` | Posição de cada tora: porta serial NMEA (`"COM5"`, GNSS da máquina ou receptor USB), trilha NMEA gravada, ou `"windows"` (Localização do Windows, no notebook da maquete). `--gnss` sobrescreve. Vazio = toras sem posição. |
+| `gnss_porta` / `gnss_baud` / `gnss_arquivo` / `gnss_validade_s` | Posição de cada tora: porta serial NMEA (`"COM5"`, GNSS da máquina ou receptor USB), `"auto"` (procura a porta que manda NMEA), trilha NMEA gravada, ou `"windows"` (Localização do Windows, no notebook da maquete). `--gnss` sobrescreve. Vazio = toras sem posição. |
+| `gnss_reserva` | Segunda fonte, usada só enquanto a principal está sem posição (ex.: `gnss_porta` `"auto"` + `gnss_reserva` `"windows"` = GNSS com prioridade, Windows de reserva). Cada posição guarda a fonte de onde veio. Vazio = sem reserva. |
+| `telemetria_url`, `telemetria_intervalo_s` | Frota (`omniroot/telemetria.py`): com uma fonte de posição ligada, a máquina manda a posição atual ao dashboard a cada N s (padrão 2), identificada pelo `maquina_id` (SN), com o mesmo `STREAM_TOKEN` da câmera. URL vazia = deduzida da `stream_url` (mesmo servidor, `/api/maquinas/posicao`). Sem rede só recua e tenta de novo, numa thread própria. |
+| `rastro_intervalo_s`, `rastro_distancia_min_m`, `rastro_parado_s` | Trajeto da máquina: um ponto no SQLite (`rastro_local`) a cada N s se andou pelo menos X m (o GNSS parado "passeia" — não vira trajeto) e um por minuto parada. Gravado **com ou sem rede**; o `sync_daemon.py` manda para `rastro_maquinas` no Postgres, e o trecho feito offline aparece no mapa quando a rede volta. |
 | `luz_realce`, `luz_limiar_boa`, `luz_limiar_critica`, `luz_ruido_baixa`, `luz_ruido_critico`, `luz_ganho_max`, `luz_empilhar_max` | Pouca luz (`omniroot/luz.py`): em luz baixa/crítica empilha quadros da tora parada e aplica ganho que preserva a cor. Nunca recusa: em luz crítica mede e marca `_luz_critica` (baixa confiança, fora dos alertas do dashboard). O ruído é medido no tempo (diferença entre quadros seguidos), então textura de fundo não conta como ruído. O HUD mostra brilho/ruído medidos para calibrar. |
 
 ### Demais diretórios
@@ -637,6 +686,9 @@ walkthrough.md                     # ⚠️ desatualizado — revisar antes de u
   `--fonte .\capturas`.
 - ✅ **Câmera ao vivo no dashboard** — thread de stream no `main.py` → painel
   MJPEG no dashboard, com "Sem sinal" quando a máquina some.
+- ✅ **Frota em tempo real** — posição de cada máquina pelo SN no mapa (ao vivo
+  com rede) e trajeto gravado offline-first (SQLite → sync → Postgres), pronto
+  para o módulo GNSS (`gnss_porta`).
 - ✅ **Ferramentas de fine-tuning** — `preparar_dataset_eucalipto.py`
   (pré-anotação, negativos, rehearsal) e `fine_tuning_eucalipto.py`
   (validação dupla).

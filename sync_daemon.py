@@ -140,6 +140,17 @@ def sincronizar_bancos(cfg: Config) -> None:
             migrar_banco_local(sqlite_conn)
             com_posicao = postgres_tem_posicao(pg_conn)
 
+            # Trajeto da máquina (rastro_local -> rastro_maquinas): independe
+            # das toras e nunca as bloqueia — falhou, tenta no próximo ciclo.
+            if postgres_tem_rastro(pg_conn):
+                try:
+                    enviados = sincronizar_rastro(pg_conn, sqlite_conn)
+                    if enviados:
+                        print(f"🛰️  {enviados} pontos do trajeto enviados.")
+                except Exception as e:
+                    pg_conn.rollback()
+                    print(f"⚠️  Trajeto não sincronizado neste ciclo: {e}")
+
             toras = buscar_toras_pendentes(sqlite_conn)
 
             if not toras:
@@ -293,6 +304,115 @@ def postgres_tem_posicao(pg_conn) -> bool:
     elif tem:
         _AVISOU_POSTGRES_SEM_POSICAO = False
     return tem
+
+
+_AVISOU_POSTGRES_SEM_RASTRO = False
+_AVISOU_RASTRO_SEM_MAQUINA = False
+
+
+def postgres_tem_rastro(pg_conn) -> bool:
+    """
+    O Postgres central já tem a tabela rastro_maquinas? Se não (setup antigo),
+    o trajeto fica guardado no SQLite até ela existir — avisa uma vez.
+    """
+    global _AVISOU_POSTGRES_SEM_RASTRO
+    cursor = pg_conn.cursor()
+    try:
+        cursor.execute("SELECT to_regclass('rastro_maquinas') IS NOT NULL")
+        tem = bool(cursor.fetchone()[0])
+    finally:
+        cursor.close()
+    pg_conn.commit()
+    if not tem and not _AVISOU_POSTGRES_SEM_RASTRO:
+        _AVISOU_POSTGRES_SEM_RASTRO = True
+        print(
+            "⚠️  O Postgres central não tem a tabela rastro_maquinas: o trajeto das máquinas fica no SQLite. "
+            "Aplique o 'Banco de dados/setup_completo.sql' de novo (é idempotente)."
+        )
+    elif tem:
+        _AVISOU_POSTGRES_SEM_RASTRO = False
+    return tem
+
+
+def sincronizar_rastro(pg_conn, sqlite_conn, lote: int = 500, max_lotes: int = 20) -> int:
+    """
+    Envia os pontos pendentes do trajeto em lotes. Idempotente: o uuid_local
+    é único no Postgres (retry após queda de rede não duplica). Só é marcado
+    como sincronizado o que o Postgres CONFIRMA ter — ponto de uma máquina que
+    não está cadastrada em `maquinas` continua pendente (com aviso).
+    Devolve quantos pontos foram confirmados.
+    """
+    global _AVISOU_RASTRO_SEM_MAQUINA
+    confirmados_total = 0
+    ultimo_id = 0
+    for _ in range(max_lotes):
+        pontos = sqlite_conn.execute(
+            """
+            SELECT id, uuid_local, maquina_id, registrado_em, lat, lon, precisao_m, hdop, satelites, fonte
+            FROM rastro_local
+            WHERE sync_status = 0 AND id > ?
+            ORDER BY id
+            LIMIT ?
+            """,
+            (ultimo_id, lote),
+        ).fetchall()
+        if not pontos:
+            break
+        ultimo_id = pontos[-1]["id"]
+        uuids = [p["uuid_local"] for p in pontos]
+
+        cursor = pg_conn.cursor()
+        try:
+            psycopg2.extras.execute_values(
+                cursor,
+                """
+                INSERT INTO rastro_maquinas
+                    (uuid_local, maquina_id, registrado_em, lat, lon, precisao_m, hdop, satelites, fonte)
+                SELECT v.uuid_local::uuid, m.id_maquina, v.registrado_em::timestamp,
+                       v.lat::double precision, v.lon::double precision, v.precisao_m::double precision,
+                       v.hdop::double precision, v.satelites::smallint, v.fonte
+                FROM (VALUES %s) AS v(uuid_local, numero_serie, registrado_em, lat, lon, precisao_m, hdop, satelites, fonte)
+                JOIN maquinas m ON m.numero_serie = v.numero_serie
+                ON CONFLICT (uuid_local) DO NOTHING
+                """,
+                [
+                    (p["uuid_local"], p["maquina_id"], p["registrado_em"], p["lat"], p["lon"],
+                     p["precisao_m"], p["hdop"], p["satelites"], p["fonte"])
+                    for p in pontos
+                ],
+            )
+            cursor.execute(
+                "SELECT uuid_local::text FROM rastro_maquinas WHERE uuid_local = ANY(%s::uuid[])",
+                (uuids,),
+            )
+            confirmados = [linha[0] for linha in cursor.fetchall()]
+            pg_conn.commit()
+        except Exception:
+            pg_conn.rollback()
+            raise
+        finally:
+            cursor.close()
+
+        # Commit remoto confirmado: só agora marca no SQLite (mesma ordem das toras).
+        if confirmados:
+            sqlite_conn.execute(
+                f"UPDATE rastro_local SET sync_status = 1 WHERE uuid_local IN ({','.join('?' * len(confirmados))})",
+                confirmados,
+            )
+            sqlite_conn.commit()
+            confirmados_total += len(confirmados)
+
+        if len(confirmados) < len(pontos) and not _AVISOU_RASTRO_SEM_MAQUINA:
+            _AVISOU_RASTRO_SEM_MAQUINA = True
+            ok = set(confirmados)
+            sem = sorted({p["maquina_id"] for p in pontos if p["uuid_local"] not in ok})
+            print(
+                f"⚠️  Trajeto de máquina não cadastrada no Postgres ({', '.join(sem)}): fica pendente no SQLite. "
+                "Confira se o maquina_id do config.json bate com um numero_serie da tabela maquinas."
+            )
+        if len(pontos) < lote:
+            break
+    return confirmados_total
 
 
 def buscar_toras_pendentes(sqlite_conn) -> list:

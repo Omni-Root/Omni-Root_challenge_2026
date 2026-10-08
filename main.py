@@ -41,7 +41,8 @@ import numpy as np
 
 from omniroot.banco_local import migrar_banco_local  # noqa: F401  (compatibilidade: testes importam de main)
 from omniroot.luz import RealceLuz, descrever_luz, nivel_do_evento  # noqa: F401
-from omniroot.posicao import LeitorPosicao
+from omniroot.posicao import LeitorPosicao, PosicaoComReserva
+from omniroot.telemetria import loop_telemetria
 
 # ------------------------------------------------------------
 # O código da máquina vive no pacote omniroot/ (um módulo por
@@ -194,9 +195,9 @@ def main():
     )
     parser.add_argument(
         "--gnss", type=str, nargs="?", const="windows", default=None,
-        help="Fonte de posição: porta serial NMEA (ex: COM5), arquivo .nmea gravado, ou 'windows' "
-             "(Localização do Windows, no notebook da maquete; é o que `--gnss` sozinho usa). "
-             "Sobrescreve o config.json"
+        help="Fonte de posição: porta serial NMEA (ex: COM5), 'auto' (procura a porta do receptor), "
+             "arquivo .nmea gravado, ou 'windows' (Localização do Windows, no notebook da maquete; é o que "
+             "`--gnss` sozinho usa). Sobrescreve gnss_porta do config.json (a gnss_reserva continua valendo)"
     )
     args = parser.parse_args()
 
@@ -216,7 +217,20 @@ def main():
     if cfg.gnss_arquivo and not Path(cfg.gnss_arquivo).is_file():
         print(f"⚠️  gnss_arquivo '{cfg.gnss_arquivo}' não encontrado — toras serão gravadas sem posição.")
         origem_gnss = ""
-    leitor_gnss = LeitorPosicao(origem_gnss, cfg.gnss_baud).iniciar() if origem_gnss else None
+    # Com gnss_reserva: as duas fontes rodam juntas e a principal (o GNSS) tem
+    # prioridade sempre que tem posição; sem fix, vale a reserva.
+    reserva_gnss = (cfg.gnss_reserva or "").strip()
+    if reserva_gnss.lower() == origem_gnss.lower():
+        reserva_gnss = ""
+    if origem_gnss and reserva_gnss:
+        print(f"🛰️  Posição: {origem_gnss} com prioridade; reserva: {reserva_gnss} (só quando a principal estiver sem posição).")
+        leitor_gnss = PosicaoComReserva(
+            LeitorPosicao(origem_gnss, cfg.gnss_baud), LeitorPosicao(reserva_gnss, cfg.gnss_baud)
+        ).iniciar()
+    elif origem_gnss or reserva_gnss:
+        leitor_gnss = LeitorPosicao(origem_gnss or reserva_gnss, cfg.gnss_baud).iniciar()
+    else:
+        leitor_gnss = None
     if leitor_gnss is None:
         print("ℹ️  Sem fonte de posição (gnss_porta/gnss_arquivo vazios): toras gravadas sem posição.")
 
@@ -387,6 +401,10 @@ def main():
     # config.json + STREAM_TOKEN no .env). Sem rede ela só espera.
     if cfg.stream_url and cfg.stream_url.strip():
         threads.append(threading.Thread(target=loop_stream, args=(cfg, estado, lock, parar), daemon=True))
+    # Frota (com fonte de posição): trajeto no SQLite sempre + posição ao
+    # vivo no dashboard enquanto houver rede. Ver omniroot/telemetria.py.
+    if leitor_gnss is not None:
+        threads.append(threading.Thread(target=loop_telemetria, args=(cfg, leitor_gnss, parar), daemon=True, name="frota"))
     for t in threads:
         t.start()
 

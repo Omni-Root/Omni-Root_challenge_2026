@@ -9,7 +9,7 @@
 --
 -- Ordem (importa: seed depende das tabelas):
 --   1. SCHEMA     — tabelas e índices que o sync_daemon.py preenche e o
---                   dashboard lê
+--                   dashboard lê (inclui o trajeto das máquinas)
 --   2. SEED       — máquina + talhão de teste (batem com o config.json)
 --   3. DENSIDADE  — tabela clones_densidade + clones da JD (fonte de
 --                   verdade da densidade; o sync baixa para a máquina)
@@ -26,7 +26,9 @@
 --
 -- Banco já de pé (aplicar mudanças):
 --   PowerShell:
---     Get-Content "Banco de dados\setup_completo.sql" | docker compose exec -T postgres psql -U postgres -d desafio_madeira
+--     cmd /c 'docker compose exec -T postgres psql -U postgres -d desafio_madeira < "Banco de dados\setup_completo.sql"'
+--   (NÃO use "Get-Content ... | docker ...": o PowerShell 5.1 troca os acentos
+--    por "?" no pipe, e o seed criaria um "Talh?o Demo" duplicado.)
 --   Git Bash / Linux / Mac:
 --     docker compose exec -T postgres psql -U postgres -d desafio_madeira < "Banco de dados/setup_completo.sql"
 --
@@ -34,7 +36,8 @@
 --   SELECT COUNT(*) FROM maquinas;          -- 1
 --   SELECT COUNT(*) FROM talhoes;           -- 1
 --   SELECT COUNT(*) FROM clones_densidade;  -- 17
---   SELECT tgname FROM pg_trigger WHERE tgname = 'trg_notificar_nova_tora';
+--   SELECT tgname FROM pg_trigger WHERE tgname IN ('trg_notificar_nova_tora', 'trg_notificar_rastro');  -- 2
+--   SELECT to_regclass('rastro_maquinas');  -- rastro_maquinas
 --   SELECT COUNT(*) FROM information_schema.columns
 --    WHERE table_name = 'toras_inspecionadas' AND column_name LIKE 'pos\_%';  -- 7
 -- ============================================================
@@ -134,6 +137,28 @@ ALTER TABLE toras_inspecionadas
     ADD COLUMN IF NOT EXISTS pos_fonte      VARCHAR(30),
     ADD COLUMN IF NOT EXISTS pos_idade_s    DOUBLE PRECISION,
     ADD COLUMN IF NOT EXISTS pos_precisao_m DOUBLE PRECISION;
+
+-- Trajeto das máquinas (frota; ver omniroot/telemetria.py). A máquina grava
+-- um ponto a cada poucos segundos no SQLite (rastro_local), COM OU SEM rede;
+-- o sync_daemon.py traz os pendentes para cá. O trecho percorrido sem
+-- internet chega quando a rede volta. A posição AO VIVO não passa por aqui:
+-- vai direto da máquina ao servidor do dashboard (memória, como a câmera).
+--   registrado_em: hora local da máquina na leitura (como data_inspecao);
+--   fonte: os mesmos valores de toras_inspecionadas.pos_fonte.
+CREATE TABLE IF NOT EXISTS rastro_maquinas (
+    id              BIGSERIAL PRIMARY KEY,
+    uuid_local      UUID UNIQUE NOT NULL,           -- gerado na máquina: idempotência do sync
+    maquina_id      INTEGER NOT NULL REFERENCES maquinas(id_maquina),
+    registrado_em   TIMESTAMP NOT NULL,
+    lat             DOUBLE PRECISION NOT NULL CHECK (lat BETWEEN -90 AND 90),
+    lon             DOUBLE PRECISION NOT NULL CHECK (lon BETWEEN -180 AND 180),
+    precisao_m      DOUBLE PRECISION,
+    hdop            DOUBLE PRECISION,
+    satelites       SMALLINT,
+    fonte           VARCHAR(30) NOT NULL,
+    sincronizado_em TIMESTAMP NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_rastro_maquina_data ON rastro_maquinas(maquina_id, registrado_em);
 
 
 -- ============================================================
@@ -257,6 +282,21 @@ DROP TRIGGER IF EXISTS trg_notificar_nova_tora ON toras_inspecionadas;
 CREATE TRIGGER trg_notificar_nova_tora
     AFTER INSERT OR UPDATE OF status_classificacao, confianca_ia, hash_sha256 ON toras_inspecionadas
     FOR EACH ROW EXECUTE FUNCTION notificar_nova_tora();
+
+-- Trajeto: UM aviso por lote que o sync insere (FOR EACH STATEMENT, não por
+-- ponto) no canal 'omniroot_rastro'; o dashboard recarrega a linha do
+-- trajeto — o trecho feito sem internet aparece assim que a rede volta.
+CREATE OR REPLACE FUNCTION notificar_rastro() RETURNS trigger AS $$
+BEGIN
+    PERFORM pg_notify('omniroot_rastro', '');
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_notificar_rastro ON rastro_maquinas;
+CREATE TRIGGER trg_notificar_rastro
+    AFTER INSERT ON rastro_maquinas
+    FOR EACH STATEMENT EXECUTE FUNCTION notificar_rastro();
 
 
 -- ============================================================

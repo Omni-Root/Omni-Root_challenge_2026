@@ -25,7 +25,16 @@ from pathlib import Path
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ))
 
-from omniroot.posicao import FONTE_LOG, FONTE_WINDOWS, LeitorPosicao, checksum_ok, ler_sentenca  # noqa: E402
+from omniroot.posicao import (  # noqa: E402
+    FONTE_LOG,
+    FONTE_WINDOWS,
+    LeitorPosicao,
+    PosicaoComReserva,
+    checksum_ok,
+    ler_sentenca,
+    parece_nmea,
+    procurar_porta_gnss,
+)
 from omniroot.banco_local import migrar_banco_local  # noqa: E402
 from omniroot.classificacao import gerar_hash_sha256  # noqa: E402
 from omniroot.config import Config  # noqa: E402
@@ -207,6 +216,53 @@ def main() -> int:
         hash_antigo = gerar_hash_sha256({"uuid_local": u2, "log_id": l3[2], "indicadores": INDICADORES, "defeitos": [], "status": "aprovado"})
         checar(l3[3] == hash_antigo, "sem posição, o hash é exatamente o do formato anterior")
         con.close()
+
+    print("7) GNSS com prioridade, Windows de reserva")
+    gnss = LeitorPosicao("COM_INEXISTENTE_TESTE")      # não iniciados: só o estado é testado
+    windows = LeitorPosicao("windows")
+    leitor = PosicaoComReserva(gnss, windows)
+    checar(leitor.atual(5.0) is None, "nenhuma das duas com posição: sem posição")
+    windows.processar_windows("POS;-23.5133;-46.5126;279.0")
+    p = leitor.atual(5.0)
+    checar(p is not None and p["fonte"] == FONTE_WINDOWS and leitor.fonte == FONTE_WINDOWS,
+           "GNSS ainda sem fix: vale a reserva (Windows), e a fonte diz isso")
+    checar("reserva: GNSS" in leitor.descricao(5.0), "HUD avisa que está na reserva e por quê")
+    gnss.processar_linha(GGA_OK)
+    p = leitor.atual(5.0)
+    checar(p is not None and p["fonte"] == "gnss_serial" and p["hdop"] == 0.9 and leitor.fonte == "gnss_serial",
+           "GNSS com fix: ele tem prioridade (fonte gnss_serial, com HDOP)")
+    checar(abs(p["lat"] - LAT) < 1e-9, "a coordenada é a do GNSS, não a do Wi-Fi")
+    gnss.processar_linha(GGA_SEM_FIX)
+    p = leitor.atual(5.0)
+    checar(p is not None and p["fonte"] == FONTE_WINDOWS, "GNSS perdeu o fix: volta para a reserva na hora")
+
+    print("8) procura automática da porta do receptor (sem hardware)")
+    checar(parece_nmea([GGA_OK, RMC_OK]), "duas sentenças íntegras = é receptor GNSS")
+    checar(not parece_nmea([GGA_OK, "lixo\r\n", "AT+OK"]), "uma só, ou lixo de modem: não é")
+
+    class PortaFalsa:
+        def __init__(self, linhas):
+            self.linhas = list(linhas)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def readline(self):
+            return (self.linhas.pop(0) + "\r\n").encode("ascii") if self.linhas else b""
+
+    def abrir(porta, baud):
+        if porta == "COM1":
+            raise OSError("porta ocupada")
+        if porta == "COM7" and baud == 38400:
+            return PortaFalsa([GGA_OK, RMC_OK, GGA_OK])
+        return PortaFalsa(["\x00\x7f", "garbage"])  # velocidade errada vira lixo
+
+    checar(procurar_porta_gnss(["COM1", "COM3", "COM7"], abrir, espera_s=0.05) == ("COM7", 38400),
+           "pula a porta ocupada e a que não fala NMEA; acha COM7 em 38400")
+    checar(procurar_porta_gnss(["COM1", "COM3"], abrir, espera_s=0.05) is None, "sem receptor: não acha nada (e não trava)")
 
     print()
     print("TUDO OK" if falhas == 0 else f"{falhas} FALHA(S)")

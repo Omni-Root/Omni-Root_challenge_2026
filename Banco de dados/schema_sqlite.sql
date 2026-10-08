@@ -85,6 +85,29 @@ CREATE TABLE defeitos_detectados_local (
 CREATE INDEX idx_defeitos_local_tora ON defeitos_detectados_local(tora_id);
 CREATE INDEX idx_defeitos_local_sync ON defeitos_detectados_local(sync_status);
 
+-- ------------------------------------------------------------
+-- 4. RASTRO_LOCAL — trajeto da máquina (omniroot/telemetria.py)
+-- ------------------------------------------------------------
+-- Um ponto a cada poucos segundos enquanto a máquina anda, gravado com ou
+-- sem rede; o sync_daemon.py envia para rastro_maquinas no Postgres. A mesma
+-- definição está em omniroot/banco_local.py (DDL_RASTRO_LOCAL), que a cria
+-- também em bancos criados antes desta tabela.
+CREATE TABLE IF NOT EXISTS rastro_local (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid_local      TEXT UNIQUE NOT NULL,
+    maquina_id      TEXT NOT NULL,              -- numero_serie da máquina (SN)
+    registrado_em   TEXT NOT NULL,              -- hora local da máquina, ISO 8601
+    lat             REAL NOT NULL,
+    lon             REAL NOT NULL,
+    precisao_m      REAL,
+    hdop            REAL,
+    satelites       INTEGER,
+    fonte           TEXT NOT NULL,
+    sync_status     INTEGER NOT NULL DEFAULT 0 CHECK (sync_status IN (0, 1))
+);
+
+CREATE INDEX IF NOT EXISTS idx_rastro_local_sync ON rastro_local(sync_status);
+
 -- ============================================================
 -- NOTA IMPORTANTE PARA A TAREFA 2 (script Python no Raspberry)
 -- ============================================================

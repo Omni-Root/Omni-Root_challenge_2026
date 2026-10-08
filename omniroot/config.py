@@ -206,12 +206,36 @@ class Config:
     #   gnss_porta = "windows": Localização do Windows — o notebook da maquete
     #               fazendo o papel da máquina (estimada por Wi-Fi, precisão de
     #               dezenas de metros; gravada como "windows_localizacao").
-    # Ambos vazios desliga. `--gnss COM5`, `--gnss trilha.nmea` ou
-    # `--gnss windows` sobrescreve.
+    #   gnss_porta = "auto": procura sozinho a porta serial que está mandando
+    #               NMEA (o número do COM muda quando o receptor troca de USB).
+    # Ambos vazios desliga. `--gnss COM5`, `--gnss trilha.nmea`, `--gnss auto`
+    # ou `--gnss windows` sobrescreve.
+    #   gnss_reserva: outra fonte, usada só enquanto a principal não tem
+    #               posição (GNSS sem fix, desconectado ou procurando a porta).
+    #               Ex.: gnss_porta "auto" + gnss_reserva "windows" = GNSS com
+    #               prioridade e a Localização do Windows de reserva. Cada
+    #               posição guarda a fonte de onde veio. Vazio = sem reserva.
     gnss_porta: str = ""
+    gnss_reserva: str = ""
     gnss_baud: int = 9600                # padrão da maioria dos receptores (alguns usam 4800)
     gnss_arquivo: str = ""
     gnss_validade_s: float = 5.0         # posição mais velha que isso não é "a posição atual"
+
+    # --- Frota: posição em tempo real + trajeto, ver omniroot/telemetria.py ---
+    # Com uma fonte de posição ligada (acima), a máquina:
+    #   - grava o TRAJETO no SQLite (rastro_local), com ou sem internet — o
+    #     sync_daemon.py manda para o Postgres quando há rede;
+    #   - envia a posição ATUAL ao dashboard a cada `telemetria_intervalo_s`,
+    #     identificada pelo SN (maquina_id), enquanto houver rede.
+    # Mesmo token da câmera (STREAM_TOKEN no .env). URL vazia: deduzida da
+    # stream_url (mesmo servidor, /api/maquinas/posicao); as duas vazias
+    # desligam só o tempo real — o trajeto continua sendo gravado.
+    telemetria_url: str = ""             # ex: http://192.168.1.50:3001/api/maquinas/posicao
+    telemetria_intervalo_s: float = 2.0  # posição ao vivo: um POST a cada N s
+    rastro_intervalo_s: float = 5.0      # trajeto: no máximo um ponto a cada N s...
+    rastro_distancia_min_m: float = 20.0  # ...e só se andou pelo menos isso (ou a precisão informada, se maior):
+                                          # GNSS parado em ambiente fechado "passeia" 10-12 m — isso não é trajeto
+    rastro_parado_s: float = 60.0        # parada: ainda assim um ponto a cada N s ("estive aqui")
 
     # --- Pouca luz / operação noturna, ver omniroot/luz.py ---
     # Mede brilho e ruído de cada quadro; em luz BAIXA ou CRÍTICA empilha
